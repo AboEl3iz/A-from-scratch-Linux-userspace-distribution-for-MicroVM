@@ -3,22 +3,87 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	"karim-microvm-os/internal/netd"
 	"karim-microvm-os/internal/stored"
 	"karim-microvm-os/internal/svcd"
+	"karim-microvm-os/internal/vsockd"
 )
 
 const defaultServiceDir = "/etc/karim/services"
+
+type supervisorBridge struct {
+	managedServices map[string]*svcd.ManagedService
+	mu              sync.RWMutex
+}
+
+func (sb *supervisorBridge) ListServices() []*vsockd.ServiceInfo {
+	sb.mu.RLock()
+	defer sb.mu.RUnlock()
+
+	var list []*vsockd.ServiceInfo
+	for _, ms := range sb.managedServices {
+		pid := 0
+		if ms.Cmd != nil && ms.Cmd.Process != nil {
+			pid = ms.Cmd.Process.Pid
+		}
+		list = append(list, &vsockd.ServiceInfo{
+			Name:           ms.Spec.Name,
+			State:          ms.State.String(),
+			PID:            pid,
+			Exec:           ms.Spec.Exec,
+			MemoryLimit:    ms.Spec.MemoryLimit,
+			CPUQuota:       ms.Spec.CPUQuota,
+			Restart:        ms.Spec.Restart,
+			SeccompProfile: ms.Spec.SeccompProfile,
+			After:          ms.Spec.After,
+		})
+	}
+	return list
+}
+
+func (sb *supervisorBridge) StartService(name string) error {
+	sb.mu.RLock()
+	ms, ok := sb.managedServices[name]
+	sb.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("service %s not found", name)
+	}
+	return ms.Start()
+}
+
+func (sb *supervisorBridge) StopService(name string) error {
+	sb.mu.RLock()
+	ms, ok := sb.managedServices[name]
+	sb.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("service %s not found", name)
+	}
+	return ms.Stop()
+}
+
+func (sb *supervisorBridge) GetServiceLogs(name string) (string, error) {
+	sb.mu.RLock()
+	ms, ok := sb.managedServices[name]
+	sb.mu.RUnlock()
+	if !ok {
+		return "", fmt.Errorf("service %s not found", name)
+	}
+	return fmt.Sprintf("[karim-svcd | %s] Active service status: %s\n", name, ms.State.String()), nil
+}
 
 func main() {
 	serviceDirFlag := flag.String("config-dir", defaultServiceDir, "Directory containing TOML service definitions")
 	enableNetFlag := flag.Bool("enable-net", true, "Automatically configure virtio-net interface via netlink")
 	enableOverlayFlag := flag.Bool("enable-overlay", false, "Mount writable tmpfs OverlayFS over rootfs")
+	enableVsockdFlag := flag.Bool("enable-vsockd", true, "Enable vsockd control plane RPC server")
 	flag.Parse()
 
 	fmt.Println("[karim-svcd] Karim MicroVM Supervisor (karim-svcd) starting...")
@@ -56,6 +121,10 @@ func main() {
 		fmt.Printf("[karim-svcd] Error loading service configurations: %v\n", err)
 	}
 
+	bridge := &supervisorBridge{
+		managedServices: make(map[string]*svcd.ManagedService),
+	}
+
 	if len(specs) == 0 {
 		fmt.Println("[karim-svcd] No service definitions found. Running empty supervisor loop.")
 	} else {
@@ -70,19 +139,48 @@ func main() {
 		}
 
 		// 6. Start managed services in topological order
-		var managedServices []*svcd.ManagedService
 		for _, spec := range orderedSpecs {
 			fmt.Printf("[karim-svcd] Starting service %s (depends on: %v)...\n", spec.Name, spec.After)
 			ms := svcd.NewManagedService(spec, cgm)
+			bridge.managedServices[spec.Name] = ms
 			if err := ms.Start(); err != nil {
 				fmt.Printf("[karim-svcd] ERROR starting service %s: %v\n", spec.Name, err)
 			}
-			managedServices = append(managedServices, ms)
 			time.Sleep(100 * time.Millisecond) // Stagger start slightly
 		}
 	}
 
-	// 7. Signal handling loop
+	// 7. Start vsockd Control Plane RPC Server (Phase 4 Component)
+	if *enableVsockdFlag {
+		fmt.Println("[karim-svcd] Initializing vsockd host-guest control plane RPC server...")
+		rpcServer := vsockd.NewServer(bridge)
+
+		socketPath := "/run/karim/vsock.sock"
+		_ = os.MkdirAll(filepath.Dir(socketPath), 0755)
+
+		if vsockd.IsVSockSupported() {
+			l, err := vsockd.ListenVSock(vsockd.DefaultVSockPort)
+			if err != nil {
+				fmt.Printf("[karim-svcd] Notice: ListenVSock failed on port %d: %v\n", vsockd.DefaultVSockPort, err)
+			} else {
+				fmt.Printf("[karim-svcd] Host-Guest Control Plane active on AF_VSOCK (Port %d)\n", vsockd.DefaultVSockPort)
+				go func(lis net.Listener) {
+					_ = rpcServer.Serve(lis)
+				}(l)
+			}
+		} else {
+			fmt.Println("[karim-svcd] Notice: AF_VSOCK not supported in guest kernel (CONFIG_VIRTIO_VSOCK=y required).")
+		}
+
+		if l, err := vsockd.ListenUnix(socketPath); err == nil {
+			fmt.Printf("[karim-svcd] Control Plane Unix fallback active on %s\n", socketPath)
+			go func(lis net.Listener) {
+				_ = rpcServer.Serve(lis)
+			}(l)
+		}
+	}
+
+	// 8. Signal handling loop
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGCHLD)
 
