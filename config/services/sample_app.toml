@@ -1,0 +1,9 @@
+[service]
+name = "sample_app"
+exec = "/bin/sample_app"
+args = []
+env = ["KARIM_ENV=production"]
+after = []
+memory_limit = "32M"
+cpu_quota = "50%"
+restart = "never"
