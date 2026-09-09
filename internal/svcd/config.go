@@ -11,15 +11,19 @@ import (
 
 // ServiceSpec defines the configuration structure for a service managed by karim-svcd.
 type ServiceSpec struct {
-	Name         string            `json:"name"`
-	Exec         string            `json:"exec"`
-	Args         []string          `json:"args"`
-	Env          []string          `json:"env"`
-	Directory    string            `json:"directory"`
-	After        []string          `json:"after"`
-	MemoryLimit  int64             `json:"memory_limit"`  // Bytes (0 means unlimited)
-	CPUQuota     float64           `json:"cpu_quota"`     // Percentage (e.g. 50.0 for 50%)
-	Restart      string            `json:"restart"`       // "always", "on-failure", "never"
+	Name             string   `json:"name"`
+	Exec             string   `json:"exec"`
+	Args             []string `json:"args"`
+	Env              []string `json:"env"`
+	Directory        string   `json:"directory"`
+	After            []string `json:"after"`
+	MemoryLimit      int64    `json:"memory_limit"` // Bytes (0 means unlimited)
+	CPUQuota         float64  `json:"cpu_quota"`    // Percentage (e.g. 50.0 for 50%)
+	Restart          string   `json:"restart"`      // "always", "on-failure", "never"
+	SeccompProfile   string   `json:"seccomp_profile"`
+	CapabilitiesAdd  []string `json:"capabilities_add"`
+	CapabilitiesDrop []string `json:"capabilities_drop"`
+	NoNewPrivs       bool     `json:"no_new_privs"`
 }
 
 // ParseServiceConfig parses a single TOML service configuration file.
@@ -31,7 +35,9 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 	defer file.Close()
 
 	spec := &ServiceSpec{
-		Restart: "on-failure",
+		Restart:        "on-failure",
+		SeccompProfile: "app-default",
+		NoNewPrivs:     true,
 	}
 
 	scanner := bufio.NewScanner(file)
@@ -79,6 +85,14 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 			spec.CPUQuota = quota
 		case "restart":
 			spec.Restart = unquote(val)
+		case "seccomp_profile":
+			spec.SeccompProfile = unquote(val)
+		case "capabilities_add", "capabilities.add":
+			spec.CapabilitiesAdd = parseArray(val)
+		case "capabilities_drop", "capabilities.drop":
+			spec.CapabilitiesDrop = parseArray(val)
+		case "no_new_privs":
+			spec.NoNewPrivs = parseBool(val)
 		}
 	}
 
@@ -189,3 +203,9 @@ func parseCPUQuota(s string) (float64, error) {
 	s = strings.TrimSuffix(s, "%")
 	return strconv.ParseFloat(strings.TrimSpace(s), 64)
 }
+
+func parseBool(s string) bool {
+	s = strings.ToLower(unquote(strings.TrimSpace(s)))
+	return s == "true" || s == "1" || s == "yes"
+}
+
