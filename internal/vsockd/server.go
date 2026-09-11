@@ -189,6 +189,13 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 		}
 		return RPCResponse{ID: req.ID, Success: true, Data: metrics}
 
+	case "get_obsd", "obsd":
+		data, err := fetchObsdMetrics()
+		if err != nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
+		}
+		return RPCResponse{ID: req.ID, Success: true, Data: data}
+
 	default:
 		return RPCResponse{
 			ID:      req.ID,
@@ -196,4 +203,31 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 			Error:   fmt.Sprintf("unknown command: %q", req.Command),
 		}
 	}
+}
+
+func fetchObsdMetrics() (any, error) {
+	conn, err := net.Dial("unix", "/run/karim/obsd.sock")
+	if err != nil {
+		return nil, fmt.Errorf("obsd daemon un-reachable at /run/karim/obsd.sock: %w", err)
+	}
+	defer conn.Close()
+
+	reqBytes, _ := EncodeJSON(RPCRequest{ID: "obsd-1", Command: "get_metrics"})
+	if err := WriteFrame(conn, reqBytes); err != nil {
+		return nil, err
+	}
+
+	respBytes, err := ReadFrame(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	var resp RPCResponse
+	if err := DecodeJSON(respBytes, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+	return resp.Data, nil
 }
