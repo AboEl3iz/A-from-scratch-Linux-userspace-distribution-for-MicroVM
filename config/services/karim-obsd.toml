@@ -1,0 +1,10 @@
+[service]
+name = "karim-obsd"
+exec = "/sbin/karim-obsd"
+args = ["-socket", "/run/karim/obsd.sock", "-prom-port", "9100"]
+env = ["KARIM_LOG=info"]
+after = []
+memory_limit = "64M"
+cpu_quota = "50%"
+restart = "always"
+seccomp_profile = "unrestricted"
