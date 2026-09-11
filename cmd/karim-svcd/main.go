@@ -190,9 +190,24 @@ func main() {
 		switch sig {
 		case syscall.SIGINT, syscall.SIGTERM:
 			fmt.Printf("[karim-svcd] Received termination signal (%v). Shutdown sequence initiated...\n", sig)
+			bridge.mu.RLock()
+			for name, ms := range bridge.managedServices {
+				fmt.Printf("[karim-svcd] Stopping service %s...\n", name)
+				_ = ms.Stop()
+			}
+			bridge.mu.RUnlock()
 			os.Exit(0)
+
 		case syscall.SIGCHLD:
-			// Signal reaper notification
+			// Asynchronous zombie reaper loop for orphan child processes
+			for {
+				var wstatus syscall.WaitStatus
+				pid, err := syscall.Wait4(-1, &wstatus, syscall.WNOHANG, nil)
+				if err != nil || pid <= 0 {
+					break
+				}
+				fmt.Printf("[karim-svcd] Reaped orphan zombie process (PID %d)\n", pid)
+			}
 		}
 	}
 }
