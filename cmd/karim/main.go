@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"karim-microvm-os/internal/obsd"
 	"karim-microvm-os/internal/vsockd"
 )
 
@@ -35,6 +36,8 @@ func printHelp() {
 	fmt.Println("  stop <service>             Gracefully stop a running service")
 	fmt.Println("  logs <service>             Display stdout/stderr log output for a service")
 	fmt.Println("  metrics                    Fetch microVM performance and memory metrics")
+	fmt.Println("  obsd                       Fetch eBPF kernel latency histograms & metrics")
+	fmt.Println("  trace                      Stream live traced process executions")
 	fmt.Println("  help                       Show this help menu")
 }
 
@@ -84,6 +87,12 @@ func main() {
 
 	case "metrics", "top":
 		runMetrics(*targetFlag)
+
+	case "obsd", "ebpf":
+		runObsd(*targetFlag)
+
+	case "trace", "execsnoop":
+		runTrace(*targetFlag)
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q. Run 'karim help' for options.\n", command)
@@ -235,4 +244,155 @@ func runMetrics(target string) {
 	fmt.Printf("  Memory Allocated:    %.2f MB\n", float64(metrics.MemoryAlloc)/(1024*1024))
 	fmt.Printf("  Memory System:       %.2f MB\n", float64(metrics.MemorySys)/(1024*1024))
 	fmt.Printf("  Managed Services:    %d\n", metrics.NumServices)
+}
+
+type HistData struct {
+	Name        string     `json:"name"`
+	Slots       [20]uint64 `json:"slots"`
+	TotalCount  uint64     `json:"total_count"`
+	LastUpdated string     `json:"last_updated"`
+}
+
+type ObsdResponseData struct {
+	IsLoaded     bool     `json:"is_loaded"`
+	FallbackMode bool     `json:"fallback_mode"`
+	RunqLatency  HistData `json:"runq_latency"`
+	BioLatency   HistData `json:"bio_latency"`
+	PromMetrics  string   `json:"prom_metrics"`
+}
+
+func getSlotRange(idx int) string {
+	if idx == 0 {
+		return "0 -> 1 us"
+	}
+	low := 1 << (idx - 1)
+	high := 1 << idx
+	if idx >= 19 {
+		return fmt.Sprintf("%d+ us", low)
+	}
+	return fmt.Sprintf("%d -> %d us", low, high)
+}
+
+func printHistogram(title string, hist HistData) {
+	fmt.Printf("\n--- %s ---\n", title)
+	if hist.TotalCount == 0 {
+		fmt.Println("  (No events recorded in kernel histogram buffer)")
+		return
+	}
+
+	var maxCount uint64
+	for _, c := range hist.Slots {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "LATENCY RANGE\tCOUNT\tDISTRIBUTION")
+	fmt.Fprintln(w, "-------------\t-----\t------------")
+
+	for i, count := range hist.Slots {
+		if count == 0 {
+			continue
+		}
+		barLen := 0
+		if maxCount > 0 {
+			barLen = int((count * 35) / maxCount)
+		}
+		if barLen == 0 && count > 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("█", barLen)
+		fmt.Fprintf(w, "%s\t%d\t%s\n", getSlotRange(i), count, bar)
+	}
+	w.Flush()
+}
+
+func runObsd(target string) {
+	resp, err := sendRPC(target, "obsd", "", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error fetching obsd telemetry: %v\n", err)
+		os.Exit(1)
+	}
+	if !resp.Success {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", resp.Error)
+		os.Exit(1)
+	}
+
+	raw, _ := json.Marshal(resp.Data)
+	var data ObsdResponseData
+	if err := json.Unmarshal(raw, &data); err != nil {
+		fmt.Println("=== Karim MicroVM eBPF Telemetry Raw Output ===")
+		fmt.Println(string(raw))
+		return
+	}
+
+	statusStr := "ACTIVE (Kernel CO-RE BTF probes loaded)"
+	if data.FallbackMode || !data.IsLoaded {
+		statusStr = "ACTIVE (Simulation Telemetry Fallback Mode)"
+	}
+
+	fmt.Println("======================================================================")
+	fmt.Println("        Karim MicroVM OS — eBPF Observability Engine Telemetry        ")
+	fmt.Println("======================================================================")
+	fmt.Printf("Probe Status:     %s\n", statusStr)
+	fmt.Printf("Kernel Probes:    sched_process_exec (ringbuffer)\n")
+	fmt.Printf("                  sched_wakeup / sched_switch (runqlat)\n")
+	fmt.Printf("                  block_rq_issue / block_rq_complete (biolatency)\n")
+
+	printHistogram("CPU Scheduler Run-Queue Latency (sched_runq_latency)", data.RunqLatency)
+	printHistogram("Block I/O Completion Latency (block_io_latency)", data.BioLatency)
+	fmt.Println("\n======================================================================")
+}
+
+func runTrace(target string) {
+	conn, err := vsockd.Dial(target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed connecting to %s: %v\n", target, err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	reqBytes, _ := vsockd.EncodeJSON(vsockd.RPCRequest{ID: "trace-1", Command: "trace"})
+	if err := vsockd.WriteFrame(conn, reqBytes); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed sending trace request: %v\n", err)
+		os.Exit(1)
+	}
+
+	respFrame, err := vsockd.ReadFrame(conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed reading response frame: %v\n", err)
+		os.Exit(1)
+	}
+
+	var initResp vsockd.RPCResponse
+	if err := vsockd.DecodeJSON(respFrame, &initResp); err == nil && !initResp.Success {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", initResp.Error)
+		os.Exit(1)
+	}
+
+	fmt.Println("======================================================================")
+	fmt.Println("        Karim MicroVM OS — Traced Process Execution Stream            ")
+	fmt.Println("======================================================================")
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "TIME\tPID\tPPID\tCOMM\tFILENAME")
+	fmt.Fprintln(w, "----\t---\t----\t----\t--------")
+	w.Flush()
+
+	for count := 0; count < 8; count++ {
+		frame, err := vsockd.ReadFrame(conn)
+		if err != nil {
+			break
+		}
+
+		var ev obsd.ExecEvent
+		if err := json.Unmarshal(frame, &ev); err != nil {
+			continue
+		}
+
+		tsStr := ev.Timestamp.Format("15:04:05.000")
+		fmt.Fprintf(w, "%s\t%d\t%d\t%s\t%s\n", tsStr, ev.PID, ev.PPID, ev.Comm, ev.Filename)
+		w.Flush()
+	}
+	fmt.Println("======================================================================")
 }
