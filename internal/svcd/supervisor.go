@@ -94,6 +94,7 @@ func (ms *ManagedService) Start() error {
 		if !ms.Spec.NoNewPrivs {
 			secdArgs = append(secdArgs, "-no-new-privs=false")
 		}
+		secdArgs = append(secdArgs, "--")
 		secdArgs = append(secdArgs, execArgs...)
 
 		execPath = secdBin
