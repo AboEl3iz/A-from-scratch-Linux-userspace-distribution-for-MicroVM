@@ -25,13 +25,14 @@ INIT_BIN := $(BUILD_DIR)/init
 SVCD_BIN := $(BUILD_DIR)/karim-svcd
 SECD_BIN := $(BUILD_DIR)/karim-secd
 VSOCKD_BIN := $(BUILD_DIR)/karim-vsockd
+OBSD_BIN := $(BUILD_DIR)/karim-obsd
 CLI_BIN  := $(DIST_DIR)/karim
 INITRD_CPIO := $(DIST_DIR)/initramfs.cpio
 ROOTFS_IMG  := $(DIST_DIR)/rootfs.sqsh
 
-.PHONY: all check-tools kernel init svcd secd vsockd ebpf initramfs rootfs build-image run run-debug test clean distclean help
+.PHONY: all check-tools kernel init svcd secd vsockd obsd ebpf initramfs rootfs build-image run run-debug test clean distclean help
 
-all: check-tools init svcd secd vsockd ebpf initramfs rootfs cli ## Build complete Karim MicroVM artifacts
+all: check-tools init svcd secd vsockd obsd ebpf initramfs rootfs cli ## Build complete Karim MicroVM artifacts
 
 # ------------------------------------------------------------------------------
 # 1. Tooling Verification
@@ -120,6 +121,11 @@ vsockd: ## Build Go guest control plane daemon (karim-vsockd)
 	@echo "==> Compiling karim-vsockd (static Go binary)..."
 	CGO_ENABLED=0 $(GO) build -ldflags="-s -w" -trimpath -o "$(BUILD_DIR)/karim-vsockd" ./cmd/karim-vsockd
 
+obsd: ebpf ## Build Go guest eBPF observability daemon (karim-obsd)
+	@mkdir -p "$(BUILD_DIR)"
+	@echo "==> Compiling karim-obsd (static Go binary)..."
+	CGO_ENABLED=0 $(GO) build -ldflags="-s -w" -trimpath -o "$(BUILD_DIR)/karim-obsd" ./cmd/karim-obsd
+
 cli: ## Build host-side karim CLI tool
 	@mkdir -p "$(DIST_DIR)"
 	@if [ -d ./cmd/karim ]; then \
@@ -135,15 +141,16 @@ cli: ## Build host-side karim CLI tool
 ebpf: ## Generate Go bindings from C eBPF source via bpf2go
 	@if [ -d ./ebpf ]; then \
 		echo "==> Compiling eBPF probes..."; \
+		export PATH=$$PATH:$$(go env GOPATH)/bin; \
 		$(GO) generate ./ebpf/...; \
 	else \
-		echo "==> Skipping eBPF probes (Phase 5 component)..."; \
+		echo "==> Skipping eBPF probes..."; \
 	fi
 
 # ------------------------------------------------------------------------------
 # 6. Initramfs Assembly (CPIO)
 # ------------------------------------------------------------------------------
-initramfs: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" svcd secd vsockd ## Pack static init, sample app, supervisor, secd, and vsockd into initramfs.cpio
+initramfs: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" svcd secd vsockd obsd ## Pack static init, sample app, supervisor, secd, vsockd, and obsd into initramfs.cpio
 	@mkdir -p "$(BUILD_DIR)/initramfs_root/dev" "$(BUILD_DIR)/initramfs_root/proc" "$(BUILD_DIR)/initramfs_root/sys" "$(BUILD_DIR)/initramfs_root/etc" "$(BUILD_DIR)/initramfs_root/bin" "$(BUILD_DIR)/initramfs_root/sbin" "$(BUILD_DIR)/initramfs_root/etc/karim/services"
 	@cp "$(INIT_BIN)" "$(BUILD_DIR)/initramfs_root/init"
 	@chmod +x "$(BUILD_DIR)/initramfs_root/init"
@@ -152,6 +159,7 @@ initramfs: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" svcd secd vsockd ## Pack static ini
 	@cp "$(BUILD_DIR)/karim-svcd" "$(BUILD_DIR)/initramfs_root/sbin/karim-svcd" 2>/dev/null || true
 	@cp "$(BUILD_DIR)/karim-secd" "$(BUILD_DIR)/initramfs_root/sbin/karim-secd" 2>/dev/null || true
 	@cp "$(BUILD_DIR)/karim-vsockd" "$(BUILD_DIR)/initramfs_root/sbin/karim-vsockd" 2>/dev/null || true
+	@cp "$(BUILD_DIR)/karim-obsd" "$(BUILD_DIR)/initramfs_root/sbin/karim-obsd" 2>/dev/null || true
 	@cp -r config/services/*.toml "$(BUILD_DIR)/initramfs_root/etc/karim/services/" 2>/dev/null || true
 	@echo "==> Generating CPIO archive..."
 	@mkdir -p "$(DIST_DIR)"
@@ -161,7 +169,7 @@ initramfs: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" svcd secd vsockd ## Pack static ini
 # ------------------------------------------------------------------------------
 # 7. Readonly Rootfs Assembly (SquashFS)
 # ------------------------------------------------------------------------------
-rootfs: svcd secd vsockd "$(SAMPLE_APP_BIN)" ## Assemble rootfs filesystem tree and compress to SquashFS
+rootfs: svcd secd vsockd obsd "$(SAMPLE_APP_BIN)" ## Assemble rootfs filesystem tree and compress to SquashFS
 	@mkdir -p "$(BUILD_DIR)/rootfs_tree/sbin" "$(BUILD_DIR)/rootfs_tree/bin"
 	@mkdir -p "$(BUILD_DIR)/rootfs_tree/etc/karim/services"
 	@mkdir -p "$(BUILD_DIR)/rootfs_tree/run/karim"
@@ -169,6 +177,7 @@ rootfs: svcd secd vsockd "$(SAMPLE_APP_BIN)" ## Assemble rootfs filesystem tree 
 	@cp "$(BUILD_DIR)/karim-svcd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-svcd" 2>/dev/null || true
 	@cp "$(BUILD_DIR)/karim-secd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-secd" 2>/dev/null || true
 	@cp "$(BUILD_DIR)/karim-vsockd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-vsockd" 2>/dev/null || true
+	@cp "$(BUILD_DIR)/karim-obsd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-obsd" 2>/dev/null || true
 	@cp "$(SAMPLE_APP_BIN)" "$(BUILD_DIR)/rootfs_tree/bin/sample_app" 2>/dev/null || true
 	@cp -r config/services/*.toml "$(BUILD_DIR)/rootfs_tree/etc/karim/services/" 2>/dev/null || true
 	@echo "==> Packing SquashFS root filesystem..."
@@ -243,6 +252,9 @@ test-phase3: ## Run Phase 3 automated test harness
 test-phase4: ## Run Phase 4 automated test harness
 	@bash testing/manual_test_phase4.sh
 
+test-phase5: ## Run Phase 5 automated test harness
+	@bash testing/manual_test_phase5.sh
+
 
 
 # ------------------------------------------------------------------------------
@@ -250,7 +262,7 @@ test-phase4: ## Run Phase 4 automated test harness
 # ------------------------------------------------------------------------------
 clean: ## Clean build intermediate files
 	@echo "==> Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR)/init $(BUILD_DIR)/karim-svcd $(BUILD_DIR)/karim-secd $(BUILD_DIR)/karim-vsockd $(BUILD_DIR)/initramfs_root $(BUILD_DIR)/rootfs_tree
+	@rm -rf $(BUILD_DIR)/init $(BUILD_DIR)/karim-svcd $(BUILD_DIR)/karim-secd $(BUILD_DIR)/karim-vsockd $(BUILD_DIR)/karim-obsd $(BUILD_DIR)/initramfs_root $(BUILD_DIR)/rootfs_tree
 
 distclean: clean ## Full clean including kernel download and dist binaries
 	@echo "==> Wiping all build and dist outputs..."
