@@ -46,8 +46,8 @@
 | **Phase 2** | Networking (`karim-netd`) & Storage Overlay (`karim-stored`) | **COMPLETED** | Netlink netns, rtnetlink bringup, OverlayFS, `make test-phase2` |
 | **Phase 3** | Hardened Isolation (`karim-secd`) | **COMPLETED** | `karim-secd`, Seccomp BPF filters, Linux capabilities, `make test-phase3` |
 | **Phase 4** | Host-Guest Control Plane (`karim-vsockd` & `karim` CLI) | **COMPLETED** | `AF_VSOCK` RPC server, host CLI `dist/karim`, `make test-phase4` |
-| **Phase 5** | eBPF Observability Engine (`karim-obsd`) | Planned | eBPF CO-RE probes (`bpf2go`) & metrics |
-| **Phase 6** | Hermetic Reproducible Image Builder | Planned | Deterministic SquashFS build manifest |
+| **Phase 5** | eBPF Observability Engine (`karim-obsd`) | **COMPLETED** | eBPF CO-RE probes (`bpf2go`), Prometheus exporter, `make test-phase5` |
+| **Phase 6** | Hermetic Reproducible Image Builder | **COMPLETED** | Hermetic CPIO/SquashFS builder, SHA-256 manifest, `make test-phase6` |
 | **Phase 7** | Build-Time Layer Engine (`karim-pkgd`) | Planned | Content-addressable layer extraction |
 | **Phase 8** | QMP Snapshot & Restore Orchestration | Planned | QEMU QMP memory serialization |
 | **Phase 9** | Entropy, RTC Sync & Debug Hardening | Planned | `virtio-rng`, RTC sync, debug shell |
@@ -85,11 +85,26 @@ make vsockd
 # Build host-side karim CLI management tool (Phase 4)
 make cli
 
+# Generate Go bindings from eBPF C probes via bpf2go (Phase 5)
+make ebpf
+
+# Build static Go eBPF observability daemon binary (Phase 5)
+make obsd
+
 # Pack initramfs CPIO archive
 make initramfs
 
 # Assemble SquashFS root filesystem
 make rootfs
+
+# Build hermetic reproducible images via karim CLI (Phase 6)
+make build-hermetic
+
+# Perform double-run byte-for-byte reproducibility audit (Phase 6)
+make verify-reproducible
+
+# Run host-side karim CLI tool with custom arguments
+make run-cli ARGS="help"
 
 # Build all Karim MicroVM OS artifacts
 make all
@@ -136,6 +151,20 @@ Executes end-to-end tests for `AF_VSOCK` transport abstraction, framed JSON RPC 
 make test-phase4
 ```
 
+### Running Phase 5 Verification
+
+Executes end-to-end tests for eBPF kernel latency probes, `karim-obsd` daemon RPCs, Prometheus `/metrics` HTTP exporter, and host CLI (`karim obsd`, `karim trace`):
+```bash
+make test-phase5
+```
+
+### Running Phase 6 Verification
+
+Executes Go builder unit tests for deterministic CPIO header generation and manifest hashing, builds hermetic `initramfs.cpio` and `rootfs.sqsh` image artifacts along with `manifest.json`, and asserts 100% byte-for-byte SHA-256 identity across double-build clean runs:
+```bash
+make test-phase6
+```
+
 ### Running MicroVM inside QEMU
 
 Boot the microVM in debug mode (kernel logs visible):
@@ -154,25 +183,36 @@ karim-microvm-os/
 ├── KARIM_DEVELOPMENT_PLAN.md    # Master architecture specification
 ├── cmd/
 │   ├── karim/                   # Host-side management CLI tool (main.go)
+│   ├── karim-obsd/              # eBPF kernel observability daemon (main.go)
 │   ├── karim-secd/              # Pre-exec security launcher binary (main.go)
 │   ├── karim-svcd/              # Go PID 1 successor supervisor (main.go)
 │   └── karim-vsockd/            # Guest control plane daemon entrypoint (main.go)
+├── ebpf/                        # eBPF C programs & bpf2go generator
+│   ├── biolatency.bpf.c         # Block I/O latency histogram probe
+│   ├── ebpf.go                  # //go:generate bpf2go directive
+│   ├── execsnoop.bpf.c          # Process execution tracing probe
+│   └── runqlat.bpf.c            # CPU scheduler runqueue latency probe
 ├── init/
 │   ├── init.c                   # Static C init binary (PID 1)
 │   └── sample_app.c             # Sample static workload application
 ├── internal/
+│   ├── builder/                 # Hermetic image compiler, CPIO & SquashFS packers, manifest generator
 │   ├── netd/                    # Netlink network configuration subsystem
+│   ├── obsd/                    # eBPF ring buffer reader & Prometheus exporter
 │   ├── secd/                    # Seccomp BPF filter compiler & capabilities engine
 │   ├── stored/                  # OverlayFS storage management subsystem
 │   ├── svcd/                    # Supervisor modules (config, graph, cgroup, supervisor)
 │   └── vsockd/                  # Host-Guest VSOCK RPC server & transport abstraction
 ├── config/
 │   └── services/                # TOML service configuration files
+│       ├── karim-obsd.toml
 │       └── sample_app.toml
 └── testing/
     ├── manual_test_phase0.sh    # Automated Phase 0 test harness
     ├── manual_test_phase1.sh    # Automated Phase 1 test harness
     ├── manual_test_phase2.sh    # Automated Phase 2 test harness
     ├── manual_test_phase3.sh    # Automated Phase 3 test harness
-    └── manual_test_phase4.sh    # Automated Phase 4 test harness
+    ├── manual_test_phase4.sh    # Automated Phase 4 test harness
+    ├── manual_test_phase5.sh    # Automated Phase 5 test harness
+    └── manual_test_phase6.sh    # Automated Phase 6 test harness
 ```
