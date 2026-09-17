@@ -43,10 +43,18 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 	scanner := bufio.NewScanner(file)
 	lineNum := 0
 
+	currentSection := ""
+
 	for scanner.Scan() {
 		lineNum++
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "[") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			secName := strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+			currentSection = secName
 			continue
 		}
 
@@ -58,15 +66,20 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 		key := strings.TrimSpace(parts[0])
 		val := strings.TrimSpace(parts[1])
 
-		switch key {
+		if currentSection == "env" || currentSection == "environment" {
+			spec.Env = append(spec.Env, fmt.Sprintf("%s=%s", key, unquote(val)))
+			continue
+		}
+
+		switch strings.ToLower(key) {
 		case "name":
 			spec.Name = unquote(val)
 		case "exec":
 			spec.Exec = unquote(val)
 		case "args":
 			spec.Args = parseArray(val)
-		case "env":
-			spec.Env = parseArray(val)
+		case "env", "environment":
+			spec.Env = append(spec.Env, parseArray(val)...)
 		case "directory":
 			spec.Directory = unquote(val)
 		case "after":
@@ -100,14 +113,20 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 		return nil, fmt.Errorf("error reading config file %s: %w", path, err)
 	}
 
-	if spec.Name == "" {
-		// Fallback to filename without extension
-		base := filepath.Base(path)
-		spec.Name = strings.TrimSuffix(base, filepath.Ext(base))
+	if spec.Exec == "" {
+		if lineNum == 0 {
+			return nil, fmt.Errorf("service file %s is empty", path)
+		}
+		if spec.Name == "" {
+			base := filepath.Base(path)
+			spec.Name = strings.TrimSuffix(base, filepath.Ext(base))
+		}
+		return nil, fmt.Errorf("service %s missing mandatory 'exec' binary path", spec.Name)
 	}
 
-	if spec.Exec == "" {
-		return nil, fmt.Errorf("service %s missing mandatory 'exec' binary path", spec.Name)
+	if spec.Name == "" {
+		base := filepath.Base(path)
+		spec.Name = strings.TrimSuffix(base, filepath.Ext(base))
 	}
 
 	return spec, nil
@@ -131,6 +150,9 @@ func LoadServiceDir(dir string) ([]*ServiceSpec, error) {
 		path := filepath.Join(dir, entry.Name())
 		spec, err := ParseServiceConfig(path)
 		if err != nil {
+			if strings.Contains(err.Error(), "is empty") {
+				continue
+			}
 			return nil, fmt.Errorf("error parsing %s: %w", path, err)
 		}
 		services = append(services, spec)
