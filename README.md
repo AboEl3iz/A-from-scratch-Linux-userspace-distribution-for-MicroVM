@@ -48,7 +48,7 @@
 | **Phase 4** | Host-Guest Control Plane (`karim-vsockd` & `karim` CLI) | **COMPLETED** | `AF_VSOCK` RPC server, host CLI `dist/karim`, `make test-phase4` |
 | **Phase 5** | eBPF Observability Engine (`karim-obsd`) | **COMPLETED** | eBPF CO-RE probes (`bpf2go`), Prometheus exporter, `make test-phase5` |
 | **Phase 6** | Hermetic Reproducible Image Builder | **COMPLETED** | Hermetic CPIO/SquashFS builder, SHA-256 manifest, `make test-phase6` |
-| **Phase 7** | Build-Time Layer Engine (`karim-pkgd`) | Planned | Content-addressable layer extraction |
+| **Phase 7** | Build-Time Layer Engine (`karim-pkgd`) | **COMPLETED** | OCI tarball parser, whiteout engine, `make test-phase7` |
 | **Phase 8** | QMP Snapshot & Restore Orchestration | Planned | QEMU QMP memory serialization |
 | **Phase 9** | Entropy, RTC Sync & Debug Hardening | Planned | `virtio-rng`, RTC sync, debug shell |
 
@@ -165,6 +165,13 @@ Executes Go builder unit tests for deterministic CPIO header generation and mani
 make test-phase6
 ```
 
+### Running Phase 7 Verification
+
+Executes Go pkgd unit tests for OCI tarball whiteout resolution (`.wh.<file>` & `.wh..wh..opq`) and layer config loading, inspects synthetic multi-layer OCI archives, and compiles integrated SquashFS rootfs images:
+```bash
+make test-phase7
+```
+
 ### Running MicroVM inside QEMU
 
 Boot the microVM in debug mode (kernel logs visible):
@@ -199,6 +206,7 @@ karim-microvm-os/
 │   ├── builder/                 # Hermetic image compiler, CPIO & SquashFS packers, manifest generator
 │   ├── netd/                    # Netlink network configuration subsystem
 │   ├── obsd/                    # eBPF ring buffer reader & Prometheus exporter
+│   ├── pkgd/                    # OCI container image parser, whiteout engine, & layer delta merger
 │   ├── secd/                    # Seccomp BPF filter compiler & capabilities engine
 │   ├── stored/                  # OverlayFS storage management subsystem
 │   ├── svcd/                    # Supervisor modules (config, graph, cgroup, supervisor)
@@ -214,5 +222,6 @@ karim-microvm-os/
     ├── manual_test_phase3.sh    # Automated Phase 3 test harness
     ├── manual_test_phase4.sh    # Automated Phase 4 test harness
     ├── manual_test_phase5.sh    # Automated Phase 5 test harness
-    └── manual_test_phase6.sh    # Automated Phase 6 test harness
+    ├── manual_test_phase6.sh    # Automated Phase 6 test harness
+    └── manual_test_phase7.sh    # Automated Phase 7 test harness
 ```
