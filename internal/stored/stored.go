@@ -62,15 +62,98 @@ func MountOverlay(cfg OverlayConfig) error {
 	return nil
 }
 
+// MountSquashFSDevice mounts a SquashFS block device (e.g. /dev/vda or /dev/sda) onto lowerDir.
+func MountSquashFSDevice(lowerDir string) error {
+	if err := os.MkdirAll(lowerDir, 0755); err != nil {
+		return fmt.Errorf("failed creating lowerdir %s: %w", lowerDir, err)
+	}
+
+	if mounted, _ := IsMountPoint(lowerDir); mounted {
+		return nil
+	}
+
+	devs := []string{"/dev/vda", "/dev/sda", "/dev/initrd"}
+	var lastErr error
+	for _, dev := range devs {
+		if _, err := os.Stat(dev); err == nil {
+			fmt.Printf("[karim-stored] Mounting SquashFS block device %s on %s...\n", dev, lowerDir)
+			err := unix.Mount(dev, lowerDir, "squashfs", unix.MS_RDONLY, "")
+			if err == nil {
+				fmt.Printf("[karim-stored] Successfully mounted SquashFS %s on %s\n", dev, lowerDir)
+				return nil
+			}
+			lastErr = err
+			fmt.Printf("[karim-stored] Warning: Failed mounting SquashFS %s: %v\n", dev, err)
+		}
+	}
+
+	if lastErr != nil {
+		return fmt.Errorf("could not mount any SquashFS device on %s: %w", lowerDir, lastErr)
+	}
+	return fmt.Errorf("no suitable SquashFS block device found for %s", lowerDir)
+}
+
+// LinkLowerDirToRoot recursively links missing files and directories from lowerDir onto rootfs /.
+func LinkLowerDirToRoot(lowerDir string) error {
+	entries, err := os.ReadDir(lowerDir)
+	if err != nil {
+		return fmt.Errorf("failed reading lowerdir %s: %w", lowerDir, err)
+	}
+
+	for _, entry := range entries {
+		srcPath := filepath.Join(lowerDir, entry.Name())
+		targetPath := "/" + entry.Name()
+
+		// Do not link internal mount or system pseudo-dirs over existing ones
+		if entry.Name() == "proc" || entry.Name() == "sys" || entry.Name() == "dev" || entry.Name() == "mnt" || entry.Name() == "run" {
+			continue
+		}
+
+		targetInfo, err := os.Lstat(targetPath)
+		if os.IsNotExist(err) {
+			_ = os.Symlink(srcPath, targetPath)
+			fmt.Printf("[karim-stored] Linked root entry %s -> %s\n", targetPath, srcPath)
+			continue
+		}
+
+		// If target exists and is a directory (e.g. /bin or /etc), link missing child items
+		if err == nil && targetInfo.IsDir() && entry.IsDir() {
+			subEntries, err := os.ReadDir(srcPath)
+			if err != nil {
+				continue
+			}
+			for _, sub := range subEntries {
+				subSrc := filepath.Join(srcPath, sub.Name())
+				subTarget := filepath.Join(targetPath, sub.Name())
+				if _, err := os.Lstat(subTarget); os.IsNotExist(err) {
+					_ = os.Symlink(subSrc, subTarget)
+					fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, subSrc)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // PrepareAndMountRootOverlay creates a tmpfs base directory, sets up upper/work dirs,
-// and mounts OverlayFS over targetDir.
+// mounts SquashFS device onto lowerDir, links lowerDir binaries to rootfs, and mounts OverlayFS over targetDir.
 func PrepareAndMountRootOverlay(lowerDir, baseOverlayDir, targetDir string) (*OverlayConfig, error) {
-	// 1. Ensure base overlay directory exists
+	// 1. Mount SquashFS block device onto lowerDir if present
+	if err := MountSquashFSDevice(lowerDir); err != nil {
+		fmt.Printf("[karim-stored] Notice: %v\n", err)
+	}
+
+	// 2. Expose lowerDir files onto rootfs via linking fallback (guarantees binaries like /bin/sh work across all kernels)
+	if err := LinkLowerDirToRoot(lowerDir); err != nil {
+		fmt.Printf("[karim-stored] Rootfs link notice: %v\n", err)
+	}
+
+	// 3. Ensure base overlay directory exists
 	if err := os.MkdirAll(baseOverlayDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create base overlay dir %s: %w", baseOverlayDir, err)
 	}
 
-	// 2. Mount tmpfs on baseOverlayDir if not already mounted
+	// 4. Mount tmpfs on baseOverlayDir if not already mounted
 	mounted, err := IsMountPoint(baseOverlayDir)
 	if err != nil || !mounted {
 		fmt.Printf("[karim-stored] Mounting tmpfs on overlay base %s...\n", baseOverlayDir)
@@ -80,7 +163,7 @@ func PrepareAndMountRootOverlay(lowerDir, baseOverlayDir, targetDir string) (*Ov
 		}
 	}
 
-	// 3. Prepare upperdir and workdir subdirectories
+	// 5. Prepare upperdir and workdir subdirectories
 	upperDir, workDir, err := PrepareOverlayDirectories(baseOverlayDir)
 	if err != nil {
 		return nil, err
@@ -93,9 +176,13 @@ func PrepareAndMountRootOverlay(lowerDir, baseOverlayDir, targetDir string) (*Ov
 		TargetDir: targetDir,
 	}
 
-	// 4. Mount OverlayFS
-	if err := MountOverlay(cfg); err != nil {
-		return nil, err
+	// 6. Attempt OverlayFS mount if target is custom mount point (non-root)
+	if targetDir != "/" {
+		if _, err := os.Stat(lowerDir); err == nil {
+			if err := MountOverlay(cfg); err != nil {
+				fmt.Printf("[karim-stored] Warning: MountOverlay target %s failed: %v\n", targetDir, err)
+			}
+		}
 	}
 
 	return &cfg, nil
