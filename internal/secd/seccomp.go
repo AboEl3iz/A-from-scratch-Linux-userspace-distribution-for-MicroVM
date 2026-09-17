@@ -101,6 +101,8 @@ var SyscallMap = map[string]uint32{
 	"wait4":                  unix.SYS_WAIT4,
 	"clone":                  unix.SYS_CLONE,
 	"clone3":                 unix.SYS_CLONE3,
+	"fork":                   unix.SYS_FORK,
+	"vfork":                  unix.SYS_VFORK,
 	"sigaltstack":            unix.SYS_SIGALTSTACK,
 	"set_robust_list":        unix.SYS_SET_ROBUST_LIST,
 	"get_robust_list":        unix.SYS_GET_ROBUST_LIST,
@@ -254,9 +256,13 @@ func GetProfileFilter(profileName string, defaultAction SeccompAction) (*Seccomp
 			"clock_gettime", "clock_getres", "clock_nanosleep", "fcntl", "getcwd", "chdir",
 			"fchdir", "mkdir", "rmdir", "unlink", "readlink", "openat", "mkdirat", "unlinkat",
 			"readlinkat", "newfstatat", "pipe2", "dup3", "prctl", "sysinfo", "uname", "tgkill",
-			"execve", "execveat", "wait4", "clone", "clone3", "sigaltstack", "set_robust_list",
+			"execve", "execveat", "wait4", "clone", "clone3", "fork", "vfork", "sigaltstack", "set_robust_list",
 			"get_robust_list", "rseq", "prlimit64", "getrandom",
 			"set_tid_address", "set_thread_area", "gettimeofday",
+			// Network syscalls
+			"socket", "connect", "accept", "sendto", "recvfrom", "sendmsg", "recvmsg",
+			"shutdown", "bind", "listen", "getsockname", "getpeername", "socketpair",
+			"setsockopt", "getsockopt", "accept4",
 		}
 		return compileFromNames(allowedNames, defaultAction)
 
@@ -273,7 +279,7 @@ func GetProfileFilter(profileName string, defaultAction SeccompAction) (*Seccomp
 			"clock_gettime", "clock_getres", "clock_nanosleep", "fcntl", "getcwd", "chdir",
 			"fchdir", "mkdir", "rmdir", "unlink", "readlink", "openat", "mkdirat", "unlinkat",
 			"readlinkat", "newfstatat", "pipe2", "dup3", "prctl", "sysinfo", "uname", "tgkill",
-			"execve", "execveat", "wait4", "clone", "clone3", "sigaltstack", "set_robust_list",
+			"execve", "execveat", "wait4", "clone", "clone3", "fork", "vfork", "sigaltstack", "set_robust_list",
 			"get_robust_list", "rseq", "prlimit64", "getrandom",
 			"set_tid_address", "set_thread_area", "gettimeofday",
 			// Network additions
