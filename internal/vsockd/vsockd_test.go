@@ -68,6 +68,14 @@ func (m *mockServiceProvider) GetServiceLogs(name string) (string, error) {
 	return logs, nil
 }
 
+func (m *mockServiceProvider) Quiesce() error {
+	return nil
+}
+
+func (m *mockServiceProvider) Unquiesce() error {
+	return nil
+}
+
 func TestVSockRPC_ServerClient(t *testing.T) {
 	tmpDir := t.TempDir()
 	socketPath := filepath.Join(tmpDir, "vsock_test.sock")
