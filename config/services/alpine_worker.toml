@@ -1,0 +1,8 @@
+name = "alpine_worker"
+exec = "/bin/sh"
+args = ["-c", "while true; do echo 'Hello from imported Alpine container!'; sleep 3; done"]
+restart = "always"
+seccomp_profile = "app-default"
+
+[env]
+PATH = "/bin:/usr/bin:/sbin"
