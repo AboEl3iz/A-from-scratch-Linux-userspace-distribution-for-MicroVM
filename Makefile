@@ -30,7 +30,7 @@ CLI_BIN  := $(DIST_DIR)/karim
 INITRD_CPIO := $(DIST_DIR)/initramfs.cpio
 ROOTFS_IMG  := $(DIST_DIR)/rootfs.sqsh
 
-.PHONY: all check-tools kernel init svcd secd vsockd obsd ebpf initramfs rootfs build-image run run-debug test clean distclean help
+.PHONY: all check-tools kernel init svcd secd vsockd obsd ebpf initramfs rootfs build-hermetic verify-reproducible build-image run run-debug run-cli test test-phase6 test-phase7 clean distclean help
 
 all: check-tools init svcd secd vsockd obsd ebpf initramfs rootfs cli ## Build complete Karim MicroVM artifacts
 
@@ -79,6 +79,7 @@ kernel: "$(DIST_DIR)/bzImage" ## Download and compile minimal Linux kernel bzIma
 # 3. PID 1 Static C Init (`karim-init`)
 # ------------------------------------------------------------------------------
 SAMPLE_APP_BIN := $(BUILD_DIR)/sample_app
+HTTPD_APP_BIN  := $(BUILD_DIR)/httpd
 
 "$(INIT_BIN)": init/init.c
 	@mkdir -p "$(BUILD_DIR)"
@@ -101,7 +102,29 @@ SAMPLE_APP_BIN := $(BUILD_DIR)/sample_app
 	fi
 	@strip "$@"
 
-init: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" ## Build static C init and sample app binaries
+KV_STORE_BIN  := $(BUILD_DIR)/kv_store
+
+"$(HTTPD_APP_BIN)": init/httpd_app.c
+	@mkdir -p "$(BUILD_DIR)"
+	@echo "==> Compiling static C httpd web server binary..."
+	@if which musl-gcc > /dev/null 2>&1; then \
+		musl-gcc $(CFLAGS) -o "$@" init/httpd_app.c; \
+	else \
+		gcc $(CFLAGS) -o "$@" init/httpd_app.c; \
+	fi
+	@strip "$@"
+
+"$(KV_STORE_BIN)": init/kv_store.c
+	@mkdir -p "$(BUILD_DIR)"
+	@echo "==> Compiling static C kv_store cache binary..."
+	@if which musl-gcc > /dev/null 2>&1; then \
+		musl-gcc $(CFLAGS) -o "$@" init/kv_store.c; \
+	else \
+		gcc $(CFLAGS) -o "$@" init/kv_store.c; \
+	fi
+	@strip "$@"
+
+init: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" "$(HTTPD_APP_BIN)" "$(KV_STORE_BIN)" ## Build static C init and workload binaries
 
 # ------------------------------------------------------------------------------
 # 4. Go Supervisor & Daemons (`karim-svcd`, `karim-cli`)
@@ -135,6 +158,10 @@ cli: ## Build host-side karim CLI tool
 		echo "==> Skipping karim host CLI (Phase 4 component)..."; \
 	fi
 
+run-cli: cli ## Run host-side karim CLI tool (e.g. make run-cli ARGS="help" or ARGS="ps")
+	@"$(DIST_DIR)/karim" $(ARGS)
+
+
 # ------------------------------------------------------------------------------
 # 5. eBPF Probes & bpf2go Generation
 # ------------------------------------------------------------------------------
@@ -150,45 +177,27 @@ ebpf: ## Generate Go bindings from C eBPF source via bpf2go
 # ------------------------------------------------------------------------------
 # 6. Initramfs Assembly (CPIO)
 # ------------------------------------------------------------------------------
-initramfs: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" svcd secd vsockd obsd ## Pack static init, sample app, supervisor, secd, vsockd, and obsd into initramfs.cpio
-	@mkdir -p "$(BUILD_DIR)/initramfs_root/dev" "$(BUILD_DIR)/initramfs_root/proc" "$(BUILD_DIR)/initramfs_root/sys" "$(BUILD_DIR)/initramfs_root/etc" "$(BUILD_DIR)/initramfs_root/bin" "$(BUILD_DIR)/initramfs_root/sbin" "$(BUILD_DIR)/initramfs_root/etc/karim/services"
-	@cp "$(INIT_BIN)" "$(BUILD_DIR)/initramfs_root/init"
-	@chmod +x "$(BUILD_DIR)/initramfs_root/init"
-	@cp "$(SAMPLE_APP_BIN)" "$(BUILD_DIR)/initramfs_root/bin/sample_app"
-	@chmod +x "$(BUILD_DIR)/initramfs_root/bin/sample_app"
-	@cp "$(BUILD_DIR)/karim-svcd" "$(BUILD_DIR)/initramfs_root/sbin/karim-svcd" 2>/dev/null || true
-	@cp "$(BUILD_DIR)/karim-secd" "$(BUILD_DIR)/initramfs_root/sbin/karim-secd" 2>/dev/null || true
-	@cp "$(BUILD_DIR)/karim-vsockd" "$(BUILD_DIR)/initramfs_root/sbin/karim-vsockd" 2>/dev/null || true
-	@cp "$(BUILD_DIR)/karim-obsd" "$(BUILD_DIR)/initramfs_root/sbin/karim-obsd" 2>/dev/null || true
-	@cp -r config/services/*.toml "$(BUILD_DIR)/initramfs_root/etc/karim/services/" 2>/dev/null || true
-	@echo "==> Generating CPIO archive..."
-	@mkdir -p "$(DIST_DIR)"
-	@cd "$(BUILD_DIR)/initramfs_root" && find . -print0 | $(CPIO) --null --create --format=newc > "$(CURDIR)/$(INITRD_CPIO)"
-	@echo "==> Initramfs generated at $(INITRD_CPIO) ($$(du -h "$(INITRD_CPIO)" | cut -f1))"
+initramfs: cli init svcd secd vsockd obsd ## Pack hermetic reproducible initramfs.cpio via karim host CLI
+	@echo "==> Building hermetic initramfs and rootfs images via karim host CLI..."
+	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)"
 
-# ------------------------------------------------------------------------------
-# 7. Readonly Rootfs Assembly (SquashFS)
-# ------------------------------------------------------------------------------
-rootfs: svcd secd vsockd obsd "$(SAMPLE_APP_BIN)" ## Assemble rootfs filesystem tree and compress to SquashFS
-	@mkdir -p "$(BUILD_DIR)/rootfs_tree/sbin" "$(BUILD_DIR)/rootfs_tree/bin"
-	@mkdir -p "$(BUILD_DIR)/rootfs_tree/etc/karim/services"
-	@mkdir -p "$(BUILD_DIR)/rootfs_tree/run/karim"
-	@mkdir -p "$(BUILD_DIR)/rootfs_tree/var" "$(BUILD_DIR)/rootfs_tree/tmp" "$(BUILD_DIR)/rootfs_tree/proc" "$(BUILD_DIR)/rootfs_tree/sys" "$(BUILD_DIR)/rootfs_tree/dev"
-	@cp "$(BUILD_DIR)/karim-svcd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-svcd" 2>/dev/null || true
-	@cp "$(BUILD_DIR)/karim-secd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-secd" 2>/dev/null || true
-	@cp "$(BUILD_DIR)/karim-vsockd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-vsockd" 2>/dev/null || true
-	@cp "$(BUILD_DIR)/karim-obsd" "$(BUILD_DIR)/rootfs_tree/sbin/karim-obsd" 2>/dev/null || true
-	@cp "$(SAMPLE_APP_BIN)" "$(BUILD_DIR)/rootfs_tree/bin/sample_app" 2>/dev/null || true
-	@cp -r config/services/*.toml "$(BUILD_DIR)/rootfs_tree/etc/karim/services/" 2>/dev/null || true
-	@echo "==> Packing SquashFS root filesystem..."
-	@mkdir -p "$(DIST_DIR)"
-	@rm -f "$(ROOTFS_IMG)"
-	@$(MKSQUASHFS) "$(BUILD_DIR)/rootfs_tree" "$(ROOTFS_IMG)" -noappend -comp xz
-	@echo "==> Rootfs ready at $(ROOTFS_IMG) ($$(du -h "$(ROOTFS_IMG)" | cut -f1))"
+rootfs: cli init svcd secd vsockd obsd ## Pack hermetic reproducible rootfs.sqsh with OCI package layers via karim host CLI
+	@echo "==> Building hermetic initramfs and rootfs images via karim host CLI..."
+	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)"
+
+build-hermetic: cli init svcd secd vsockd obsd ## Compile hermetic initramfs and rootfs images via karim build
+	@echo "==> Building hermetic reproducible images via karim host CLI..."
+	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)"
+
+verify-reproducible: cli init svcd secd vsockd obsd ## Perform double-run byte-for-byte reproducibility audit
+	@echo "==> Running hermetic reproducibility audit..."
+	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)" --verify-reproducible
+
 
 # ------------------------------------------------------------------------------
 # 8. QEMU MicroVM Execution Targets
 # ------------------------------------------------------------------------------
+QMP_SOCKET ?= /tmp/qmp.sock
 VSOCK_ARG := $(shell test -r /dev/vhost-vsock -a -w /dev/vhost-vsock 2>/dev/null && echo "-device vhost-vsock-pci,guest-cid=3")
 
 QEMU_ARGS := -m 512M \
@@ -200,6 +209,7 @@ QEMU_ARGS := -m 512M \
 	-drive file=$(ROOTFS_IMG),if=virtio,format=raw,readonly=on \
 	-netdev user,id=net0 \
 	-device virtio-net-pci,netdev=net0 \
+	-qmp unix:$(QMP_SOCKET),server,nowait \
 	$(VSOCK_ARG) \
 	-nographic
 
@@ -254,6 +264,17 @@ test-phase4: ## Run Phase 4 automated test harness
 
 test-phase5: ## Run Phase 5 automated test harness
 	@bash testing/manual_test_phase5.sh
+
+test-phase6: ## Run Phase 6 automated test harness
+	@bash testing/manual_test_phase6.sh
+
+test-phase7: ## Run Phase 7 automated test harness
+	@bash testing/manual_test_phase7.sh
+
+test-phase8: ## Run Phase 8 automated test harness
+	@bash testing/manual_test_phase8.sh
+
+
 
 
 
