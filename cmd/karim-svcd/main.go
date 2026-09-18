@@ -79,10 +79,21 @@ func (sb *supervisorBridge) GetServiceLogs(name string) (string, error) {
 	return fmt.Sprintf("[karim-svcd | %s] Active service status: %s\n", name, ms.State.String()), nil
 }
 
+func (sb *supervisorBridge) Quiesce() error {
+	fmt.Println("[karim-svcd] Guest snapshot quiesce requested: issuing syscall.Sync()...")
+	syscall.Sync()
+	return nil
+}
+
+func (sb *supervisorBridge) Unquiesce() error {
+	fmt.Println("[karim-svcd] Guest snapshot thaw requested: resuming normal process execution.")
+	return nil
+}
+
 func main() {
 	serviceDirFlag := flag.String("config-dir", defaultServiceDir, "Directory containing TOML service definitions")
 	enableNetFlag := flag.Bool("enable-net", true, "Automatically configure virtio-net interface via netlink")
-	enableOverlayFlag := flag.Bool("enable-overlay", false, "Mount writable tmpfs OverlayFS over rootfs")
+	enableOverlayFlag := flag.Bool("enable-overlay", true, "Mount writable tmpfs OverlayFS over rootfs")
 	enableVsockdFlag := flag.Bool("enable-vsockd", true, "Enable vsockd control plane RPC server")
 	flag.Parse()
 
@@ -91,11 +102,11 @@ func main() {
 	// 1. Storage Overlay Setup (Phase 2 Component)
 	if *enableOverlayFlag {
 		fmt.Println("[karim-svcd] Initializing OverlayFS storage subsystem...")
-		overlayCfg, err := stored.PrepareAndMountRootOverlay("/mnt/lower", "/run/karim/overlay", "/mnt/root")
+		overlayCfg, err := stored.PrepareAndMountRootOverlay("/mnt/lower", "/run/karim/overlay", "/")
 		if err != nil {
 			fmt.Printf("[karim-svcd] Storage overlay notice/warning: %v\n", err)
 		} else {
-			fmt.Printf("[karim-svcd] OverlayFS mounted successfully: %+v\n", overlayCfg)
+			fmt.Printf("[karim-svcd] OverlayFS mounted successfully: lower=%s -> target=%s\n", overlayCfg.LowerDir, overlayCfg.TargetDir)
 		}
 	}
 
