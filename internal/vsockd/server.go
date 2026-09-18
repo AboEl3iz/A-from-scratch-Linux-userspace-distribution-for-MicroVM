@@ -15,6 +15,8 @@ type ServiceProvider interface {
 	StartService(name string) error
 	StopService(name string) error
 	GetServiceLogs(name string) (string, error)
+	Quiesce() error
+	Unquiesce() error
 }
 
 // Server encapsulates the vsockd RPC control plane daemon.
@@ -195,6 +197,24 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
 		}
 		return RPCResponse{ID: req.ID, Success: true, Data: data}
+
+	case "quiesce", "freeze":
+		if s.provider == nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: "no service provider configured"}
+		}
+		if err := s.provider.Quiesce(); err != nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
+		}
+		return RPCResponse{ID: req.ID, Success: true, Data: "guest filesystem buffers synced and state quiesced"}
+
+	case "unquiesce", "thaw":
+		if s.provider == nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: "no service provider configured"}
+		}
+		if err := s.provider.Unquiesce(); err != nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
+		}
+		return RPCResponse{ID: req.ID, Success: true, Data: "guest state unquiesced"}
 
 	default:
 		return RPCResponse{
