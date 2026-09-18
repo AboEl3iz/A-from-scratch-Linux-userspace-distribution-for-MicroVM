@@ -56,7 +56,6 @@ func (b *svcdBridge) ListServices() []*vsockd.ServiceInfo {
 
 	var list []*vsockd.ServiceInfo
 	for _, ms := range b.services {
-		ms.Spec.Name = ms.Spec.Name // copy spec
 		pid := 0
 		if ms.Cmd != nil && ms.Cmd.Process != nil {
 			pid = ms.Cmd.Process.Pid
@@ -107,6 +106,17 @@ func (b *svcdBridge) GetServiceLogs(name string) (string, error) {
 		return "", fmt.Errorf("service %q not found", name)
 	}
 	return fmt.Sprintf("[vsockd] Active service telemetry log buffer for %s\n", name), nil
+}
+
+func (b *svcdBridge) Quiesce() error {
+	fmt.Println("[karim-vsockd] Guest snapshot quiesce requested: flushing filesystem buffers via syscall.Sync()...")
+	syscall.Sync()
+	return nil
+}
+
+func (b *svcdBridge) Unquiesce() error {
+	fmt.Println("[karim-vsockd] Guest snapshot thaw requested: microVM state restored and active.")
+	return nil
 }
 
 func main() {
