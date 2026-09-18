@@ -1,0 +1,8 @@
+name = "httpd"
+exec = "/bin/httpd"
+args = []
+restart = "on-failure"
+seccomp_profile = "net-service"
+
+[env]
+PATH = "/bin:/usr/bin:/sbin"
