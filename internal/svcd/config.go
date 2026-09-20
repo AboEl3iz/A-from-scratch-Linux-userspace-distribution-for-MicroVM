@@ -52,6 +52,28 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 			continue
 		}
 
+		// Strip inline comment if present outside quotes
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			inQuotes := false
+			quoteChar := byte(0)
+			for i := 0; i < idx; i++ {
+				if (line[i] == '"' || line[i] == '\'') && (i == 0 || line[i-1] != '\\') {
+					if !inQuotes {
+						inQuotes = true
+						quoteChar = line[i]
+					} else if line[i] == quoteChar {
+						inQuotes = false
+					}
+				}
+			}
+			if !inQuotes {
+				line = strings.TrimSpace(line[:idx])
+				if line == "" {
+					continue
+				}
+			}
+		}
+
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
 			secName := strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
 			currentSection = secName
