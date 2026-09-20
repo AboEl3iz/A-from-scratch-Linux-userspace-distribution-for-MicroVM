@@ -8,7 +8,7 @@
 [![Security](https://img.shields.io/badge/Security-Seccomp_BPF_%2B_Caps-red?style=for-the-badge&logo=shield&logoColor=white)](#running-phase-3-verification)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](#)
 
-**Karim MicroVM OS** is a zero-dependency, minimal Linux distribution built from scratch for high-performance MicroVM workloads. It provides a static C PID 1 boot loader (`karim-init`), a compiled Go supervisor (`karim-svcd`) for process hierarchy management with cgroups v2 isolation, netlink networking (`karim-netd`), OverlayFS storage (`karim-stored`), Seccomp BPF & capability isolation (`karim-secd`), host-guest VSOCK control plane (`karim-vsockd` & `karim` CLI), eBPF CO-RE observability, reproducible image building, OCI layer engine, and QMP state snapshot/restore orchestration.
+**Karim MicroVM OS** is a zero-dependency, minimal Linux distribution built from scratch for high-performance MicroVM workloads. It provides a static C PID 1 boot loader (`karim-init`), a compiled Go supervisor (`karim-svcd`) for process hierarchy management with cgroups v2 isolation, netlink networking (`karim-netd`), OverlayFS storage (`karim-stored`), Seccomp BPF & capability isolation (`karim-secd`), host-guest VSOCK control plane (`karim-vsockd` & `karim` CLI), eBPF CO-RE observability, reproducible image building, OCI layer engine, QMP state snapshot/restore orchestration, and hardware entropy / RTC clock sync / debug hardening (`internal/system`).
 
 ---
 
@@ -19,6 +19,7 @@
        │ Host Management CLI (karim)                              │
        │ - Communicates via AF_VSOCK (vsock://3:1024)             │
        │ - Orchestrates QMP Snapshots (unix:///tmp/qmp.sock)     │
+       │ - Queries System Entropy, RTC Sync & Debug Mode          │
        └────────────────────────────┬─────────────────────────────┘
                                     │ virtio-vsock stream / QMP
        ┌────────────────────────────▼─────────────────────────────┐
@@ -28,6 +29,9 @@
        ┌────────────────────────────▼─────────────────────────────┐
        │ PID 1: Static C Init (karim-init)                        │
        │ - Mounts /proc, /sys, /dev, /sys/fs/cgroup               │
+       │ - Seeds entropy pool from virtio-rng (/dev/hwrng)        │
+       │ - Synchronizes hardware Real-Time Clock (/dev/rtc0)       │
+       │ - Parses /proc/cmdline for emergency debug shell         │
        │ - Reaps zombie processes asynchronously (SIGCHLD)        │
        └────────────────────────────┬─────────────────────────────┘
                                     │
@@ -37,6 +41,7 @@
        │ - Initializes virtio-net networking (karim-netd)         │
        │ - Mounts SquashFS + tmpfs OverlayFS (karim-stored)       │
        │ - Enforces Seccomp BPF & Capabilities (karim-secd)      │
+       │ - Exposes system entropy & RTC health over VSOCK         │
        │ - Parses /etc/karim/services/*.toml                       │
        │ - Resolves service DAG startup graph                     │
        │ - Manages cgroup v2 leaves (/sys/fs/cgroup/karim/<svc>)  │
@@ -59,7 +64,8 @@
 | **Phase 6** | Hermetic Reproducible Image Builder | **COMPLETED** | Hermetic CPIO/SquashFS builder, SHA-256 manifest, `make test-phase6` |
 | **Phase 7** | Build-Time Layer Engine (`internal/pkgd`) | **COMPLETED** | OCI tarball parser, whiteout engine, `karim import`, `make test-phase7` |
 | **Phase 8** | QMP Snapshot & Restore Orchestration (`internal/qmp` & `internal/snapshot`) | **COMPLETED** | QEMU QMP memory state save/restore, guest VFS quiesce via `syscall.Sync`, `karim snapshot`, `make test-phase8` |
-| **Phase 9** | Entropy, RTC Sync & Debug Hardening | Planned | `virtio-rng`, RTC sync, debug shell |
+| **Phase 9** | Entropy, RTC Sync & Debug Hardening (`internal/system`) | **COMPLETED** | `virtio-rng` seed, RTC `/dev/rtc0` sync, `/proc/cmdline` debug shell, `karim system`, `make test-phase9` |
+
 
 ---
 
@@ -188,6 +194,13 @@ Executes Go unit tests for QMP hypervisor IPC connection handling, state save/re
 make test-phase8
 ```
 
+### Running Phase 9 Verification
+
+Executes Go unit tests for internal system entropy parsing, kernel cmdline debug flag detection, static `init.c` binary string auditing (virtio-rng, RTC sync, emergency debug shell), mock VSOCK RPC server initialization, and `karim system` host CLI reporting:
+```bash
+make test-phase9
+```
+
 ### Running MicroVM inside QEMU
 
 Boot the microVM in debug mode (kernel logs visible):
@@ -216,8 +229,7 @@ karim-microvm-os/
 │   ├── execsnoop.bpf.c          # Process execution tracing probe
 │   └── runqlat.bpf.c            # CPU scheduler runqueue latency probe
 ├── init/
-│   ├── init.c                   # Static C init binary (PID 1)
-│   └── sample_app.c             # Sample static workload application
+│   └── init.c                   # Static C init binary (PID 1)
 ├── internal/
 │   ├── builder/                 # Hermetic image compiler, CPIO & SquashFS packers, manifest generator
 │   ├── netd/                    # Netlink network configuration subsystem
@@ -228,11 +240,11 @@ karim-microvm-os/
 │   ├── snapshot/                # MicroVM state save/restore/list orchestrator
 │   ├── stored/                  # OverlayFS storage management subsystem
 │   ├── svcd/                    # Supervisor modules (config, graph, cgroup, supervisor)
+│   ├── system/                  # System entropy, RTC availability & cmdline debug flag engine
 │   └── vsockd/                  # Host-Guest VSOCK RPC server & transport abstraction
 ├── config/
 │   └── services/                # TOML service configuration files
-│       ├── karim-obsd.toml
-│       └── sample_app.toml
+│       └── karim-obsd.toml
 └── testing/
     ├── manual_test_phase0.sh    # Automated Phase 0 test harness
     ├── manual_test_phase1.sh    # Automated Phase 1 test harness
@@ -242,5 +254,7 @@ karim-microvm-os/
     ├── manual_test_phase5.sh    # Automated Phase 5 test harness
     ├── manual_test_phase6.sh    # Automated Phase 6 test harness
     ├── manual_test_phase7.sh    # Automated Phase 7 test harness
-    └── manual_test_phase8.sh    # Automated Phase 8 test harness
+    ├── manual_test_phase8.sh    # Automated Phase 8 test harness
+    └── manual_test_phase9.sh    # Automated Phase 9 test harness
 ```
+
