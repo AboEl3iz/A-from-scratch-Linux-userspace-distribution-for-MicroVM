@@ -104,6 +104,11 @@ func (s *Server) handleConnection(conn net.Conn) {
 			continue
 		}
 
+		if req.Command == "trace" || req.Command == "stream_exec" || req.Command == "execsnoop" {
+			s.handleTraceStream(conn, &req)
+			return
+		}
+
 		resp := s.dispatchCommand(&req)
 		respBytes, err := EncodeJSON(resp)
 		if err != nil {
@@ -118,6 +123,57 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 	}
 }
+
+func (s *Server) handleTraceStream(conn net.Conn, req *RPCRequest) {
+	obsdConn, err := net.Dial("unix", "/run/karim/obsd.sock")
+	if err != nil {
+		respBytes, _ := EncodeJSON(RPCResponse{
+			ID:      req.ID,
+			Success: false,
+			Error:   fmt.Sprintf("obsd daemon un-reachable at /run/karim/obsd.sock: %v", err),
+		})
+		_ = WriteFrame(conn, respBytes)
+		return
+	}
+	defer obsdConn.Close()
+
+	reqBytes, _ := EncodeJSON(RPCRequest{ID: req.ID, Command: "trace"})
+	if err := WriteFrame(obsdConn, reqBytes); err != nil {
+		respBytes, _ := EncodeJSON(RPCResponse{
+			ID:      req.ID,
+			Success: false,
+			Error:   fmt.Sprintf("failed writing to obsd socket: %v", err),
+		})
+		_ = WriteFrame(conn, respBytes)
+		return
+	}
+
+	initFrame, err := ReadFrame(obsdConn)
+	if err != nil {
+		respBytes, _ := EncodeJSON(RPCResponse{
+			ID:      req.ID,
+			Success: false,
+			Error:   fmt.Sprintf("failed reading initial response from obsd: %v", err),
+		})
+		_ = WriteFrame(conn, respBytes)
+		return
+	}
+
+	if err := WriteFrame(conn, initFrame); err != nil {
+		return
+	}
+
+	for {
+		frame, err := ReadFrame(obsdConn)
+		if err != nil {
+			break
+		}
+		if err := WriteFrame(conn, frame); err != nil {
+			break
+		}
+	}
+}
+
 
 func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 	switch req.Command {
@@ -225,6 +281,10 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
 		}
 		return RPCResponse{ID: req.ID, Success: true, Data: status}
+
+	case "trace", "stream_exec", "execsnoop":
+		return RPCResponse{ID: req.ID, Success: true, Data: "STREAM_START"}
+
 
 
 	default:
