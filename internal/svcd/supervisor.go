@@ -105,9 +105,13 @@ func (ms *ManagedService) Start() error {
 	if ms.Spec.Directory != "" {
 		cmd.Dir = ms.Spec.Directory
 	}
-	if len(ms.Spec.Env) > 0 {
-		cmd.Env = append(os.Environ(), ms.Spec.Env...)
+	defaultEnv := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"LD_LIBRARY_PATH=/lib:/usr/lib:/usr/local/lib:/lib64:/usr/lib64:/usr/local/lib64",
+		"HOME=/root",
+		"TMPDIR=/tmp",
 	}
+	cmd.Env = append(defaultEnv, ms.Spec.Env...)
 	cmd.SysProcAttr = SetupChildProcAttr()
 
 	stdoutPipe, err := cmd.StdoutPipe()
