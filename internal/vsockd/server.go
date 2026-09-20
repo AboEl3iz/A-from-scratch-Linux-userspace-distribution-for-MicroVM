@@ -7,7 +7,10 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"karim-microvm-os/internal/system"
 )
+
 
 // ServiceProvider defines the bridge interface between vsockd control server and svcd process manager.
 type ServiceProvider interface {
@@ -215,6 +218,14 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
 		}
 		return RPCResponse{ID: req.ID, Success: true, Data: "guest state unquiesced"}
+
+	case "get_system_status", "system", "system_status", "status", "hardd":
+		status, err := system.GetSystemStatus()
+		if err != nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
+		}
+		return RPCResponse{ID: req.ID, Success: true, Data: status}
+
 
 	default:
 		return RPCResponse{
