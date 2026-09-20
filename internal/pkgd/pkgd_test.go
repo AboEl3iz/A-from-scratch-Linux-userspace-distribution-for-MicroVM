@@ -5,30 +5,46 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
 
 func createTarArchive(files map[string]string) []byte {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 
+	// Write whiteout markers first
 	for name, content := range files {
-		hdr := &tar.Header{
-			Name:     name,
-			Mode:     0644,
-			Size:     int64(len(content)),
-			Typeflag: tar.TypeReg,
+		if strings.Contains(name, ".wh.") {
+			hdr := &tar.Header{
+				Name:     name,
+				Mode:     0644,
+				Size:     int64(len(content)),
+				Typeflag: tar.TypeReg,
+			}
+			_ = tw.WriteHeader(hdr)
+			_, _ = tw.Write([]byte(content))
 		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			panic(err)
-		}
-		if _, err := tw.Write([]byte(content)); err != nil {
-			panic(err)
+	}
+
+	// Write regular files
+	for name, content := range files {
+		if !strings.Contains(name, ".wh.") {
+			hdr := &tar.Header{
+				Name:     name,
+				Mode:     0644,
+				Size:     int64(len(content)),
+				Typeflag: tar.TypeReg,
+			}
+			_ = tw.WriteHeader(hdr)
+			_, _ = tw.Write([]byte(content))
 		}
 	}
 	tw.Close()
 	return buf.Bytes()
 }
+
 
 func TestOCIWhiteoutExtraction(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "pkgd-test-*")
