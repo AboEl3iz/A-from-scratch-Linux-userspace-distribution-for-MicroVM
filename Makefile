@@ -10,8 +10,8 @@ KERNEL_VER := 6.6.45
 KERNEL_DIR := $(BUILD_DIR)/linux-$(KERNEL_VER)
 KERNEL_BZIMAGE := $(KERNEL_DIR)/arch/x86/boot/bzImage
 
-# Toolchain definitions
-CC ?= musl-gcc
+# Toolchain definitions (GNU glibc + GCC)
+CC ?= gcc
 CFLAGS ?= -O2 -Wall -Wextra -static -pedantic
 GO ?= go
 CLANG ?= clang
@@ -38,8 +38,8 @@ all: check-tools init svcd secd vsockd obsd ebpf initramfs rootfs cli ## Build c
 # 1. Tooling Verification
 # ------------------------------------------------------------------------------
 check-tools: ## Check if essential build tools exist on the host
-	@echo "==> Verifying host toolchain..."
-	@which $(CC) > /dev/null || (echo "WARNING/NOTICE: $(CC) not found. Install musl-tools (sudo apt install musl-tools) or fallback to gcc -static." && exit 1)
+	@echo "==> Verifying host toolchain (GNU glibc + GCC)..."
+	@which $(CC) > /dev/null || (echo "ERROR: $(CC) compiler not found. Install gcc (sudo apt install build-essential)." && exit 1)
 	@which $(GO) > /dev/null || (echo "ERROR: $(GO) not found. Install Go." && exit 1)
 	@which $(CLANG) > /dev/null || (echo "ERROR: $(CLANG) not found. Install clang." && exit 1)
 	@which $(QEMU) > /dev/null || (echo "ERROR: $(QEMU) not found. Install qemu-system-x86." && exit 1)
@@ -83,29 +83,25 @@ HTTPD_APP_BIN  := $(BUILD_DIR)/httpd
 
 "$(INIT_BIN)": init/init.c
 	@mkdir -p "$(BUILD_DIR)"
-	@echo "==> Compiling static C init (PID 1)..."
-	@if which musl-gcc > /dev/null 2>&1; then \
-		musl-gcc $(CFLAGS) -o "$@" init/init.c; \
-	else \
-		gcc $(CFLAGS) -o "$@" init/init.c; \
-	fi
+	@echo "==> Compiling static C init (PID 1) with GNU GCC..."
+	@gcc $(CFLAGS) -o "$@" init/init.c
 	@strip "$@"
 	@echo "==> Static init binary size: $$(du -h "$@" | cut -f1)"
 
 init: "$(INIT_BIN)" ## Build static C init and workload binaries
 	@if [ -f init/sample_app.c ]; then \
-		echo "==> Compiling static sample application binary..."; \
-		if which musl-gcc > /dev/null 2>&1; then musl-gcc $(CFLAGS) -o "$(SAMPLE_APP_BIN)" init/sample_app.c; else gcc $(CFLAGS) -o "$(SAMPLE_APP_BIN)" init/sample_app.c; fi; \
+		echo "==> Compiling static sample application binary with GCC..."; \
+		gcc $(CFLAGS) -o "$(SAMPLE_APP_BIN)" init/sample_app.c; \
 		strip "$(SAMPLE_APP_BIN)"; \
 	fi
 	@if [ -f init/httpd_app.c ]; then \
-		echo "==> Compiling static C httpd web server binary..."; \
-		if which musl-gcc > /dev/null 2>&1; then musl-gcc $(CFLAGS) -o "$(HTTPD_APP_BIN)" init/httpd_app.c; else gcc $(CFLAGS) -o "$(HTTPD_APP_BIN)" init/httpd_app.c; fi; \
+		echo "==> Compiling static C httpd web server binary with GCC..."; \
+		gcc $(CFLAGS) -o "$(HTTPD_APP_BIN)" init/httpd_app.c; \
 		strip "$(HTTPD_APP_BIN)"; \
 	fi
 	@if [ -f init/kv_store.c ]; then \
-		echo "==> Compiling static C kv_store cache binary..."; \
-		if which musl-gcc > /dev/null 2>&1; then musl-gcc $(CFLAGS) -o "$(KV_STORE_BIN)" init/kv_store.c; else gcc $(CFLAGS) -o "$(KV_STORE_BIN)" init/kv_store.c; fi; \
+		echo "==> Compiling static C kv_store cache binary with GCC..."; \
+		gcc $(CFLAGS) -o "$(KV_STORE_BIN)" init/kv_store.c; \
 		strip "$(KV_STORE_BIN)"; \
 	fi
 
