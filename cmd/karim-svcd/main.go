@@ -14,7 +14,9 @@ import (
 	"karim-microvm-os/internal/netd"
 	"karim-microvm-os/internal/stored"
 	"karim-microvm-os/internal/svcd"
+	"karim-microvm-os/internal/system"
 	"karim-microvm-os/internal/vsockd"
+
 )
 
 const defaultServiceDir = "/etc/karim/services"
@@ -98,6 +100,12 @@ func main() {
 	flag.Parse()
 
 	fmt.Println("[karim-svcd] Karim MicroVM Supervisor (karim-svcd) starting...")
+
+	if sysStat, err := system.GetSystemStatus(); err == nil {
+		fmt.Printf("[karim-svcd] System status verified: entropy=%d bits, rtc=%v, debug=%v\n",
+			sysStat.EntropyAvail, sysStat.RTCSynced, sysStat.DebugMode)
+	}
+
 
 	// 1. Storage Overlay Setup (Phase 2 Component)
 	if *enableOverlayFlag {
@@ -217,8 +225,22 @@ func main() {
 				if err != nil || pid <= 0 {
 					break
 				}
-				fmt.Printf("[karim-svcd] Reaped orphan zombie process (PID %d)\n", pid)
+				// Check if PID belongs to a managed service to avoid false 'orphan' log message
+				isManaged := false
+				bridge.mu.RLock()
+				for _, ms := range bridge.managedServices {
+					if ms.Cmd != nil && ms.Cmd.Process != nil && ms.Cmd.Process.Pid == pid {
+						isManaged = true
+						break
+					}
+				}
+				bridge.mu.RUnlock()
+
+				if !isManaged {
+					fmt.Printf("[karim-svcd] Reaped orphan zombie process (PID %d)\n", pid)
+				}
 			}
+
 		}
 	}
 }
