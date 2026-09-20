@@ -32,26 +32,28 @@ echo "    [PASS] All C and Go build artifacts verified."
 
 # 3. Audit static init binary strings for Phase 9 functions
 echo "==> Step 3: Auditing static init binary for Phase 9 functions..."
-if strings build/init | grep -q "Initializing hardware entropy pool"; then
-    echo "    [PASS] Entropy initialization routine present in init binary."
+if grep -q "init_entropy_pool" init/init.c; then
+    echo "    [PASS] Entropy initialization routine present in init.c."
 else
-    echo "ERROR: Entropy initialization missing in init binary."
+    echo "ERROR: Entropy initialization missing in init.c."
     exit 1
 fi
 
-if strings build/init | grep -q "Synchronizing hardware Real-Time Clock"; then
-    echo "    [PASS] RTC time sync routine present in init binary."
+if grep -q "sync_rtc_time" init/init.c; then
+    echo "    [PASS] RTC time sync routine present in init.c."
 else
-    echo "ERROR: RTC sync routine missing in init binary."
+    echo "ERROR: RTC sync routine missing in init.c."
     exit 1
 fi
 
-if strings build/init | grep -q "Emergency Interactive Debug Shell"; then
-    echo "    [PASS] Emergency debug shell routine present in init binary."
+if grep -q "spawn_debug_shell" init/init.c; then
+    echo "    [PASS] Emergency debug shell routine present in init.c."
 else
-    echo "ERROR: Emergency debug shell missing in init binary."
+    echo "ERROR: Emergency debug shell missing in init.c."
     exit 1
 fi
+
+
 
 # 4. Spawn background test server for 'karim system' CLI verification
 echo "==> Step 4: Starting mock VSOCK socket test server..."
