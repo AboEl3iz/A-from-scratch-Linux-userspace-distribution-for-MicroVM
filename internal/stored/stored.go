@@ -120,24 +120,38 @@ func LinkLowerDirToRoot(lowerDir string) error {
 			continue
 		}
 
-		// If target exists and is a directory (e.g. /bin or /etc), link missing child items
+		// If target exists and is a directory (e.g. /usr or /etc), recursively link missing child items
 		if err == nil && targetInfo.IsDir() && entry.IsDir() {
-			subEntries, err := os.ReadDir(srcPath)
-			if err != nil {
-				continue
+			_ = linkDirectoryContents(srcPath, targetPath)
+		}
+	}
+	return nil
+}
+
+func linkDirectoryContents(srcDir, targetDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range entries {
+		subSrc := filepath.Join(srcDir, entry.Name())
+		subTarget := filepath.Join(targetDir, entry.Name())
+
+		targetInfo, err := os.Lstat(subTarget)
+		if os.IsNotExist(err) {
+			realSub := subSrc
+			if resolved, err := filepath.EvalSymlinks(subSrc); err == nil {
+				realSub = resolved
 			}
-			for _, sub := range subEntries {
-				subSrc := filepath.Join(srcPath, sub.Name())
-				subTarget := filepath.Join(targetPath, sub.Name())
-				if _, err := os.Lstat(subTarget); os.IsNotExist(err) {
-					realSub := subSrc
-					if resolved, err := filepath.EvalSymlinks(subSrc); err == nil {
-						realSub = resolved
-					}
-					_ = os.Symlink(realSub, subTarget)
-					fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, realSub)
-				}
-			}
+			_ = os.Symlink(realSub, subTarget)
+			fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, realSub)
+			continue
+		}
+
+		// Recurse into nested subdirectories (e.g. /usr/lib or /usr/local/lib)
+		if err == nil && targetInfo.IsDir() && entry.IsDir() {
+			_ = linkDirectoryContents(subSrc, subTarget)
 		}
 	}
 	return nil
