@@ -140,16 +140,22 @@ func linkDirectoryContents(srcDir, targetDir string) error {
 
 		targetInfo, err := os.Lstat(subTarget)
 		if os.IsNotExist(err) {
-			realSub := subSrc
-			if resolved, err := filepath.EvalSymlinks(subSrc); err == nil {
-				realSub = resolved
+			if entry.IsDir() {
+				// Create real directory in writable tmpfs tree so sub-paths remain writable for apps
+				_ = os.MkdirAll(subTarget, 0755)
+				_ = linkDirectoryContents(subSrc, subTarget)
+			} else {
+				realSub := subSrc
+				if resolved, err := filepath.EvalSymlinks(subSrc); err == nil {
+					realSub = resolved
+				}
+				_ = os.Symlink(realSub, subTarget)
+				fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, realSub)
 			}
-			_ = os.Symlink(realSub, subTarget)
-			fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, realSub)
 			continue
 		}
 
-		// Recurse into nested subdirectories (e.g. /usr/lib or /usr/local/lib)
+		// Recurse into nested subdirectories (e.g. /usr/lib or /var/cache)
 		if err == nil && targetInfo.IsDir() && entry.IsDir() {
 			_ = linkDirectoryContents(subSrc, subTarget)
 		}
@@ -163,6 +169,17 @@ func PrepareAndMountRootOverlay(lowerDir, baseOverlayDir, targetDir string) (*Ov
 	// 1. Mount SquashFS block device onto lowerDir if present
 	if err := MountSquashFSDevice(lowerDir); err != nil {
 		fmt.Printf("[karim-stored] Notice: %v\n", err)
+	}
+
+	// 1.5 Ensure ephemeral paths (/var, /tmp, /run) are mounted as writable tmpfs
+	for _, writableDir := range []string{"/var", "/tmp", "/run"} {
+		_ = os.MkdirAll(writableDir, 0755)
+		if mounted, _ := IsMountPoint(writableDir); !mounted {
+			err := unix.Mount("tmpfs", writableDir, "tmpfs", 0, "size=64M,mode=0755")
+			if err == nil {
+				fmt.Printf("[karim-stored] Mounted writable tmpfs on %s\n", writableDir)
+			}
+		}
 	}
 
 	// 2. Expose lowerDir files onto rootfs via linking fallback (guarantees binaries like /bin/sh work across all kernels)
