@@ -111,8 +111,12 @@ func LinkLowerDirToRoot(lowerDir string) error {
 
 		targetInfo, err := os.Lstat(targetPath)
 		if os.IsNotExist(err) {
-			_ = os.Symlink(srcPath, targetPath)
-			fmt.Printf("[karim-stored] Linked root entry %s -> %s\n", targetPath, srcPath)
+			realSrc := srcPath
+			if resolved, err := filepath.EvalSymlinks(srcPath); err == nil {
+				realSrc = resolved
+			}
+			_ = os.Symlink(realSrc, targetPath)
+			fmt.Printf("[karim-stored] Linked root entry %s -> %s\n", targetPath, realSrc)
 			continue
 		}
 
@@ -126,8 +130,12 @@ func LinkLowerDirToRoot(lowerDir string) error {
 				subSrc := filepath.Join(srcPath, sub.Name())
 				subTarget := filepath.Join(targetPath, sub.Name())
 				if _, err := os.Lstat(subTarget); os.IsNotExist(err) {
-					_ = os.Symlink(subSrc, subTarget)
-					fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, subSrc)
+					realSub := subSrc
+					if resolved, err := filepath.EvalSymlinks(subSrc); err == nil {
+						realSub = resolved
+					}
+					_ = os.Symlink(realSub, subTarget)
+					fmt.Printf("[karim-stored] Linked sub-entry %s -> %s\n", subTarget, realSub)
 				}
 			}
 		}
