@@ -14,7 +14,9 @@ import (
 	"karim-microvm-os/internal/obsd"
 	"karim-microvm-os/internal/pkgd"
 	"karim-microvm-os/internal/snapshot"
+	"karim-microvm-os/internal/system"
 	"karim-microvm-os/internal/vsockd"
+
 )
 
 const asciiLogo = `
@@ -46,6 +48,7 @@ func printHelp() {
 	fmt.Println("  build                      Build hermetic initramfs and SquashFS images")
 	fmt.Println("  import <archive.tar>       Inspect or import an OCI/Docker image tarball")
 	fmt.Println("  snapshot <subcommand>      Orchestrate microVM QMP state save/restore/list")
+	fmt.Println("  system                     Fetch guest hardware entropy, RTC sync & debug status")
 	fmt.Println("  help                       Show this help menu")
 }
 
@@ -110,6 +113,10 @@ func main() {
 
 	case "snapshot", "qmp":
 		runSnapshot(*targetFlag, args[1:])
+
+	case "system", "status", "hardd":
+		runSystem(*targetFlag)
+
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q. Run 'karim help' for options.\n", command)
@@ -735,5 +742,53 @@ func runSnapshot(vsockTarget string, cmdArgs []string) {
 		os.Exit(1)
 	}
 }
+
+func runSystem(target string) {
+	resp, err := sendRPC(target, "get_system_status", "", nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error fetching system status: %v\n", err)
+		os.Exit(1)
+	}
+	if !resp.Success {
+		fmt.Fprintf(os.Stderr, "Server error: %s\n", resp.Error)
+		os.Exit(1)
+	}
+
+	raw, _ := json.Marshal(resp.Data)
+	var sys system.SystemStatus
+	if err := json.Unmarshal(raw, &sys); err != nil {
+		fmt.Printf("Raw system status data: %s\n", string(raw))
+		return
+	}
+
+	entropyStatus := fmt.Sprintf("%d bits (HEALTHY)", sys.EntropyAvail)
+	if sys.EntropyAvail < 1000 {
+		entropyStatus = fmt.Sprintf("%d bits (LOW)", sys.EntropyAvail)
+	}
+
+	rtcStatus := "DISABLED / ABSENT"
+	if sys.RTCSynced {
+		rtcStatus = "ACTIVE (/dev/rtc0 hardware clock)"
+	}
+
+	debugStatus := "DISABLED (Production Mode)"
+	if sys.DebugMode {
+		debugStatus = "ACTIVE (karim.debug=1 cmdline flag set)"
+	}
+
+	fmt.Println("======================================================================")
+	fmt.Println("    Karim MicroVM OS — Phase 9 System, Entropy & RTC Hardening Status ")
+	fmt.Println("======================================================================")
+	fmt.Printf("  Kernel Entropy Pool:  %s\n", entropyStatus)
+	fmt.Printf("  Real-Time Clock:      %s\n", rtcStatus)
+	fmt.Printf("  Current Guest Time:   %s\n", sys.CurrentTime.Format("2006-01-02 15:04:05 UTC"))
+	fmt.Printf("  Debug Shell Mode:     %s\n", debugStatus)
+	fmt.Printf("  Guest Uptime:         %.2f seconds\n", sys.UptimeSeconds)
+	if sys.KernelCmdline != "" {
+		fmt.Printf("  Kernel Command Line:  %s\n", sys.KernelCmdline)
+	}
+	fmt.Println("======================================================================")
+}
+
 
 
