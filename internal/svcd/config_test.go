@@ -90,3 +90,18 @@ restart = "always"
 		t.Errorf("expected restart 'always', got %s", spec.Restart)
 	}
 }
+
+func TestParseArrayWithCommas(t *testing.T) {
+	input := `["-e", "const http = require('http'); http.createServer((req, res) => { res.end('ok'); }).listen(8080);"]`
+	got := parseArray(input)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 items, got %d: %#v", len(got), got)
+	}
+	if got[0] != "-e" {
+		t.Errorf("expected '-e', got %q", got[0])
+	}
+	expectedCode := "const http = require('http'); http.createServer((req, res) => { res.end('ok'); }).listen(8080);"
+	if got[1] != expectedCode {
+		t.Errorf("expected code %q, got %q", expectedCode, got[1])
+	}
+}

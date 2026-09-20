@@ -202,14 +202,57 @@ func parseArray(s string) []string {
 		return []string{}
 	}
 
-	rawItems := strings.Split(content, ",")
 	var result []string
-	for _, item := range rawItems {
-		trimmed := unquote(strings.TrimSpace(item))
-		if trimmed != "" {
-			result = append(result, trimmed)
+	var current strings.Builder
+	inQuotes := false
+	quoteChar := byte(0)
+	escaped := false
+
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+
+		if escaped {
+			current.WriteByte(ch)
+			escaped = false
+			continue
+		}
+
+		if ch == '\\' && inQuotes {
+			current.WriteByte(ch)
+			escaped = true
+			continue
+		}
+
+		if ch == '"' || ch == '\'' {
+			if !inQuotes {
+				inQuotes = true
+				quoteChar = ch
+			} else if ch == quoteChar {
+				inQuotes = false
+			}
+			current.WriteByte(ch)
+			continue
+		}
+
+		if ch == ',' && !inQuotes {
+			item := unquote(strings.TrimSpace(current.String()))
+			if item != "" {
+				result = append(result, item)
+			}
+			current.Reset()
+			continue
+		}
+
+		current.WriteByte(ch)
+	}
+
+	if current.Len() > 0 {
+		item := unquote(strings.TrimSpace(current.String()))
+		if item != "" {
+			result = append(result, item)
 		}
 	}
+
 	return result
 }
 
