@@ -157,6 +157,25 @@ func BuildImagePipeline(cfg BuildConfig) (*BuildManifest, error) {
 		}
 	}
 
+	// Ensure default /etc/passwd and /etc/group exist if missing in rootfs tree
+	passwdContent := []byte("root:x:0:0:root:/root:/bin/sh\nnginx:x:101:101:nginx:/var/cache/nginx:/sbin/nologin\nnobody:x:65534:65534:nobody:/:/sbin/nologin\n")
+	groupContent := []byte("root:x:0:\nnginx:x:101:\nnobody:x:65534:\n")
+
+	passwdPath := filepath.Join(rootfsStaging, "etc/passwd")
+	groupPath := filepath.Join(rootfsStaging, "etc/group")
+	if _, err := os.Stat(passwdPath); os.IsNotExist(err) {
+		_ = os.WriteFile(passwdPath, passwdContent, 0644)
+	}
+	if _, err := os.Stat(groupPath); os.IsNotExist(err) {
+		_ = os.WriteFile(groupPath, groupContent, 0644)
+	}
+	if _, err := os.Stat(filepath.Join(initramfsStaging, "etc/passwd")); os.IsNotExist(err) {
+		_ = os.WriteFile(filepath.Join(initramfsStaging, "etc/passwd"), passwdContent, 0644)
+	}
+	if _, err := os.Stat(filepath.Join(initramfsStaging, "etc/group")); os.IsNotExist(err) {
+		_ = os.WriteFile(filepath.Join(initramfsStaging, "etc/group"), groupContent, 0644)
+	}
+
 	fixedTime := time.Unix(cfg.SourceDateEpoch, 0).UTC()
 
 	// 4. Pack Deterministic CPIO Initramfs
