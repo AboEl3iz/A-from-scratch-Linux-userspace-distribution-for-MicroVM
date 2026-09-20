@@ -1,0 +1,9 @@
+name = "obsd"
+exec = "/sbin/karim-obsd"
+args = ["-socket", "/run/karim/obsd.sock", "-prom-port", "9100"]
+restart = "always"
+
+# Security & Isolation
+seccomp_profile = "unrestricted"
+capabilities_add = ["CAP_SYS_ADMIN", "CAP_BPF", "CAP_PERFMON"]
+memory_limit = 67108864 # 64 MB
