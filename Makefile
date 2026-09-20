@@ -30,7 +30,7 @@ CLI_BIN  := $(DIST_DIR)/karim
 INITRD_CPIO := $(DIST_DIR)/initramfs.cpio
 ROOTFS_IMG  := $(DIST_DIR)/rootfs.sqsh
 
-.PHONY: all check-tools kernel init svcd secd vsockd obsd ebpf initramfs rootfs build-hermetic verify-reproducible build-image run run-debug run-cli test test-phase6 test-phase7 clean distclean help
+.PHONY: all check-tools kernel init svcd secd vsockd obsd ebpf initramfs rootfs build-hermetic verify-reproducible build-image run run-debug run-cli test test-phase0 test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-phase7 test-phase8 test-phase9 clean distclean help
 
 all: check-tools init svcd secd vsockd obsd ebpf initramfs rootfs cli ## Build complete Karim MicroVM artifacts
 
@@ -92,39 +92,23 @@ HTTPD_APP_BIN  := $(BUILD_DIR)/httpd
 	@strip "$@"
 	@echo "==> Static init binary size: $$(du -h "$@" | cut -f1)"
 
-"$(SAMPLE_APP_BIN)": init/sample_app.c
-	@mkdir -p "$(BUILD_DIR)"
-	@echo "==> Compiling static sample application binary..."
-	@if which musl-gcc > /dev/null 2>&1; then \
-		musl-gcc $(CFLAGS) -o "$@" init/sample_app.c; \
-	else \
-		gcc $(CFLAGS) -o "$@" init/sample_app.c; \
+init: "$(INIT_BIN)" ## Build static C init and workload binaries
+	@if [ -f init/sample_app.c ]; then \
+		echo "==> Compiling static sample application binary..."; \
+		if which musl-gcc > /dev/null 2>&1; then musl-gcc $(CFLAGS) -o "$(SAMPLE_APP_BIN)" init/sample_app.c; else gcc $(CFLAGS) -o "$(SAMPLE_APP_BIN)" init/sample_app.c; fi; \
+		strip "$(SAMPLE_APP_BIN)"; \
 	fi
-	@strip "$@"
-
-KV_STORE_BIN  := $(BUILD_DIR)/kv_store
-
-"$(HTTPD_APP_BIN)": init/httpd_app.c
-	@mkdir -p "$(BUILD_DIR)"
-	@echo "==> Compiling static C httpd web server binary..."
-	@if which musl-gcc > /dev/null 2>&1; then \
-		musl-gcc $(CFLAGS) -o "$@" init/httpd_app.c; \
-	else \
-		gcc $(CFLAGS) -o "$@" init/httpd_app.c; \
+	@if [ -f init/httpd_app.c ]; then \
+		echo "==> Compiling static C httpd web server binary..."; \
+		if which musl-gcc > /dev/null 2>&1; then musl-gcc $(CFLAGS) -o "$(HTTPD_APP_BIN)" init/httpd_app.c; else gcc $(CFLAGS) -o "$(HTTPD_APP_BIN)" init/httpd_app.c; fi; \
+		strip "$(HTTPD_APP_BIN)"; \
 	fi
-	@strip "$@"
-
-"$(KV_STORE_BIN)": init/kv_store.c
-	@mkdir -p "$(BUILD_DIR)"
-	@echo "==> Compiling static C kv_store cache binary..."
-	@if which musl-gcc > /dev/null 2>&1; then \
-		musl-gcc $(CFLAGS) -o "$@" init/kv_store.c; \
-	else \
-		gcc $(CFLAGS) -o "$@" init/kv_store.c; \
+	@if [ -f init/kv_store.c ]; then \
+		echo "==> Compiling static C kv_store cache binary..."; \
+		if which musl-gcc > /dev/null 2>&1; then musl-gcc $(CFLAGS) -o "$(KV_STORE_BIN)" init/kv_store.c; else gcc $(CFLAGS) -o "$(KV_STORE_BIN)" init/kv_store.c; fi; \
+		strip "$(KV_STORE_BIN)"; \
 	fi
-	@strip "$@"
 
-init: "$(INIT_BIN)" "$(SAMPLE_APP_BIN)" "$(HTTPD_APP_BIN)" "$(KV_STORE_BIN)" ## Build static C init and workload binaries
 
 # ------------------------------------------------------------------------------
 # 4. Go Supervisor & Daemons (`karim-svcd`, `karim-cli`)
@@ -209,9 +193,11 @@ QEMU_ARGS := -m 512M \
 	-drive file=$(ROOTFS_IMG),if=virtio,format=raw,readonly=on \
 	-netdev user,id=net0 \
 	-device virtio-net-pci,netdev=net0 \
+	-device virtio-rng-pci \
 	-qmp unix:$(QMP_SOCKET),server,nowait \
 	$(VSOCK_ARG) \
 	-nographic
+
 
 check-vsock: ## Verify /dev/vhost-vsock permissions for host-guest control plane
 	@if [ ! -r /dev/vhost-vsock ] || [ ! -w /dev/vhost-vsock ]; then \
@@ -273,6 +259,10 @@ test-phase7: ## Run Phase 7 automated test harness
 
 test-phase8: ## Run Phase 8 automated test harness
 	@bash testing/manual_test_phase8.sh
+
+test-phase9: ## Run Phase 9 automated test harness
+	@bash testing/manual_test_phase9.sh
+
 
 
 
