@@ -176,13 +176,15 @@ func (ms *ManagedService) monitor() {
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
+			fmt.Printf("[karim-svcd] Service %s exited with status %d: %v\n", ms.Spec.Name, exitCode, err)
 		} else {
-			exitCode = -1
+			exitCode = 1
+			fmt.Printf("[karim-svcd] Service %s exited: %v\n", ms.Spec.Name, err)
 		}
-		fmt.Printf("[karim-svcd] Service %s exited with status %d: %v\n", ms.Spec.Name, exitCode, err)
 	} else {
 		fmt.Printf("[karim-svcd] Service %s exited cleanly (code 0)\n", ms.Spec.Name)
 	}
+
 	ms.mu.Unlock()
 
 	// Handle restart policies
