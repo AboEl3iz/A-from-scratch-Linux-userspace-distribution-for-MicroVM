@@ -160,9 +160,6 @@ func ExtractLayerTarball(r io.Reader, destDir string) error {
 			}
 			_ = os.Remove(targetPath)
 			linkVal := hdr.Linkname
-			if !strings.HasPrefix(linkVal, "/") && !strings.HasPrefix(linkVal, ".") {
-				linkVal = "/" + linkVal
-			}
 			if err := os.Symlink(linkVal, targetPath); err != nil {
 				return fmt.Errorf("failed creating symlink %s -> %s: %w", targetPath, linkVal, err)
 			}
