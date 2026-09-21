@@ -11,7 +11,6 @@ import (
 	"karim-microvm-os/internal/system"
 )
 
-
 // ServiceProvider defines the bridge interface between vsockd control server and svcd process manager.
 type ServiceProvider interface {
 	ListServices() []*ServiceInfo
@@ -174,7 +173,6 @@ func (s *Server) handleTraceStream(conn net.Conn, req *RPCRequest) {
 	}
 }
 
-
 func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 	switch req.Command {
 	case "ping":
@@ -284,8 +282,6 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 
 	case "trace", "stream_exec", "execsnoop":
 		return RPCResponse{ID: req.ID, Success: true, Data: "STREAM_START"}
-
-
 
 	default:
 		return RPCResponse{

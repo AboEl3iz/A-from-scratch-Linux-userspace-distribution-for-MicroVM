@@ -1,7 +1,9 @@
-# Karim MicroVM OS — Clean Single-Image Layer Specification
+# Karim MicroVM OS — Layer Specification Config
+# Declare additional OCI package layers to merge into the hermetic rootfs image.
 
-[[layer]]
-name = "nginx-standalone"
-type = "oci-archive"
-path = "/tmp/karim_docker_nginx_alpine.tar"
-target_dir = "/"
+# Example OCI layer declaration:
+# [[layer]]
+# name = "nginx-standalone"
+# type = "oci-archive"
+# path = "/var/lib/karim/layers/nginx_alpine.tar"
+# target_dir = "/"

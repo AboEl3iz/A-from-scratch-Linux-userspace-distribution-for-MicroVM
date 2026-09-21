@@ -163,7 +163,7 @@ func (ms *ManagedService) Stop() error {
 
 	ms.State = StateStopping
 	fmt.Printf("[karim-svcd] Stopping service %s (PID %d)...\n", ms.Spec.Name, ms.Cmd.Process.Pid)
-	
+
 	// Send SIGTERM
 	if err := ms.Cmd.Process.Signal(os.Interrupt); err != nil {
 		_ = ms.Cmd.Process.Kill()

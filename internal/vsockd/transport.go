@@ -28,7 +28,7 @@ func (a *VSockAddr) String() string  { return fmt.Sprintf("%d:%d", a.CID, a.Port
 
 // VSockConn implements net.Conn over an AF_VSOCK file descriptor.
 type VSockConn struct {
-	fd   int
+	fd    int
 	laddr VSockAddr
 	raddr VSockAddr
 }
