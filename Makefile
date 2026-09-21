@@ -148,12 +148,15 @@ run-cli: cli ## Run host-side karim CLI tool (e.g. make run-cli ARGS="help" or A
 # ------------------------------------------------------------------------------
 ebpf: ## Generate Go bindings from C eBPF source via bpf2go
 	@if [ -d ./ebpf ]; then \
-		echo "==> Compiling eBPF probes..."; \
 		export PATH=$$PATH:$$(go env GOPATH)/bin; \
-		$(GO) generate ./ebpf/...; \
-	else \
-		echo "==> Skipping eBPF probes..."; \
+		if command -v bpf2go >/dev/null 2>&1; then \
+			echo "==> Compiling eBPF probes via bpf2go..."; \
+			$(GO) generate ./ebpf/...; \
+		else \
+			echo "==> bpf2go tool not installed; utilizing pre-compiled eBPF bytecode probes in ebpf/"; \
+		fi \
 	fi
+
 
 # ------------------------------------------------------------------------------
 # 6. Initramfs Assembly (CPIO)
