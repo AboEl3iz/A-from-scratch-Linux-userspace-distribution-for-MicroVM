@@ -1,0 +1,8 @@
+title = "Gitleaks Security Scanner Config for Karim MicroVM OS"
+
+[allowlist]
+description = "Global allowlist for testing paths"
+paths = [
+    '''testing/.*''',
+    '''internal/.*_test\.go'''
+]
