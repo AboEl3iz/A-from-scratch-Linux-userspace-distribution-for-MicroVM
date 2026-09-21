@@ -105,12 +105,16 @@ jobs:
           exit-code: '0'
           severity: 'CRITICAL,HIGH'
 
+      - name: Ensure Output Directory Exists
+        run: mkdir -p dist
+
       - name: Generate Software Bill of Materials (SBOM) via Syft
         uses: anchore/sbom-action@v0
         with:
           format: 'spdx-json'
           output-file: 'dist/karim-microvm-os.spdx.json'
           artifact-name: 'karim-microvm-os.spdx.json'
+
 
   # ============================================================================
   # JOB 3: Unit Testing & Code Coverage Suite

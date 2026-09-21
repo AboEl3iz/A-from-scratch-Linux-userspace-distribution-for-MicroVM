@@ -130,7 +130,7 @@ obsd: ebpf ## Build Go guest eBPF observability daemon (karim-obsd)
 	@echo "==> Compiling karim-obsd (static Go binary)..."
 	CGO_ENABLED=0 $(GO) build -ldflags="-s -w" -trimpath -o "$(BUILD_DIR)/karim-obsd" ./cmd/karim-obsd
 
-cli: ## Build host-side karim CLI tool
+cli: ebpf ## Build host-side karim CLI tool
 	@mkdir -p "$(DIST_DIR)"
 	@if [ -d ./cmd/karim ]; then \
 		echo "==> Compiling karim host CLI..."; \
@@ -226,9 +226,10 @@ run-debug: all check-vsock ## Boot Karim MicroVM in debug mode (kernel logs visi
 # ------------------------------------------------------------------------------
 # 9. Integration Testing
 # ------------------------------------------------------------------------------
-test: ## Run guest-less network/cgroup integration harness outside QEMU
+test: ebpf ## Run guest-less network/cgroup integration harness outside QEMU
 	@echo "==> Running unit tests and Linux netns integration tests..."
 	$(GO) test -v -race ./internal/...
+
 
 test-phase0: ## Run Phase 0 automated test harness
 	@bash testing/manual_test_phase0.sh
