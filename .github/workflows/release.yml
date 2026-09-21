@@ -1,0 +1,70 @@
+name: "Karim MicroVM OS — Automated Release & Supply Chain Pipeline"
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+jobs:
+  build-and-release:
+    name: "Build & Publish Release Artifacts"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: true
+
+      - name: Install Toolchain Prerequisites
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            gcc musl-tools clang squashfs-tools cpio qemu-system-x86
+
+      - name: Verify Reproducibility before Release
+        run: |
+          echo "==> Verifying reproducible build identity for tag ${{ github.ref_name }}..."
+          make verify-reproducible
+
+      - name: Build Production Distribution Artifacts
+        run: |
+          make all
+
+      - name: Generate Release Manifest & SHA-256 Hashes
+        run: |
+          cd dist
+          sha256sum karim initramfs.cpio rootfs.sqsh > SHA256SUMS
+          echo "Release Checksums:"
+          cat SHA256SUMS
+
+      - name: Generate SBOM (Software Bill of Materials)
+        uses: anchore/sbom-action@v0
+        with:
+          format: 'spdx-json'
+          output-file: 'dist/karim-microvm-os-${{ github.ref_name }}.spdx.json'
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Karim MicroVM OS ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/karim
+            dist/initramfs.cpio
+            dist/rootfs.sqsh
+            dist/SHA256SUMS
+            dist/karim-microvm-os-${{ github.ref_name }}.spdx.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
