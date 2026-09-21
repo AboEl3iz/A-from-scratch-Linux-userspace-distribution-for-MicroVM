@@ -62,7 +62,7 @@ func TestManifestComparison(t *testing.T) {
 		ProjectName: "karim-microvm-os",
 		OutputArtifacts: map[string]ArtifactChecksum{
 			"initramfs.cpio": {Name: "initramfs.cpio", SHA256: "abc123def456"},
-			"rootfs.sqsh":     {Name: "rootfs.sqsh", SHA256: "789xyz012345"},
+			"rootfs.sqsh":    {Name: "rootfs.sqsh", SHA256: "789xyz012345"},
 		},
 	}
 
@@ -70,7 +70,7 @@ func TestManifestComparison(t *testing.T) {
 		ProjectName: "karim-microvm-os",
 		OutputArtifacts: map[string]ArtifactChecksum{
 			"initramfs.cpio": {Name: "initramfs.cpio", SHA256: "abc123def456"},
-			"rootfs.sqsh":     {Name: "rootfs.sqsh", SHA256: "789xyz012345"},
+			"rootfs.sqsh":    {Name: "rootfs.sqsh", SHA256: "789xyz012345"},
 		},
 	}
 

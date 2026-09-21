@@ -17,8 +17,8 @@ type mockVSockProvider struct {
 }
 
 func (m *mockVSockProvider) ListServices() []*vsockd.ServiceInfo { return nil }
-func (m *mockVSockProvider) StartService(name string) error     { return nil }
-func (m *mockVSockProvider) StopService(name string) error      { return nil }
+func (m *mockVSockProvider) StartService(name string) error      { return nil }
+func (m *mockVSockProvider) StopService(name string) error       { return nil }
 func (m *mockVSockProvider) GetServiceLogs(name string) (string, error) {
 	return "", nil
 }

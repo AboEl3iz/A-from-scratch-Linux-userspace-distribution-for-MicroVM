@@ -9,7 +9,6 @@ import (
 	"testing"
 )
 
-
 func createTarArchive(files map[string]string) []byte {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -45,7 +44,6 @@ func createTarArchive(files map[string]string) []byte {
 	return buf.Bytes()
 }
 
-
 func TestOCIWhiteoutExtraction(t *testing.T) {
 	tmpDir, err := os.MkdirTemp("", "pkgd-test-*")
 	if err != nil {
@@ -57,9 +55,9 @@ func TestOCIWhiteoutExtraction(t *testing.T) {
 
 	// Layer 1: Base files
 	layer1Files := map[string]string{
-		"etc/config.txt":   "v1 config",
-		"etc/shadow":       "root:secret",
-		"var/log/app.log":  "init log",
+		"etc/config.txt":  "v1 config",
+		"etc/shadow":      "root:secret",
+		"var/log/app.log": "init log",
 	}
 	l1Data := createTarArchive(layer1Files)
 	if err := ExtractLayerTarball(bytes.NewReader(l1Data), targetRoot); err != nil {
@@ -73,9 +71,9 @@ func TestOCIWhiteoutExtraction(t *testing.T) {
 
 	// Layer 2: Deletes etc/shadow using whiteout .wh.shadow, modifies etc/config.txt
 	layer2Files := map[string]string{
-		"etc/.wh.shadow":  "",
-		"etc/config.txt":  "v2 config updated",
-		"usr/bin/tool":    "binary data",
+		"etc/.wh.shadow": "",
+		"etc/config.txt": "v2 config updated",
+		"usr/bin/tool":   "binary data",
 	}
 	l2Data := createTarArchive(layer2Files)
 	if err := ExtractLayerTarball(bytes.NewReader(l2Data), targetRoot); err != nil {

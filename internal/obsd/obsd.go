@@ -56,10 +56,10 @@ func NewManager() *Manager {
 	}
 
 	// Seed simulation counters with realistic initial buckets
-	m.simRunqLat[2] = 45 // 4-8us
+	m.simRunqLat[2] = 45  // 4-8us
 	m.simRunqLat[3] = 120 // 8-16us
-	m.simRunqLat[4] = 85 // 16-32us
-	m.simRunqLat[5] = 12 // 32-64us
+	m.simRunqLat[4] = 85  // 16-32us
+	m.simRunqLat[5] = 12  // 32-64us
 
 	m.simBioLat[5] = 30 // 32-64us
 	m.simBioLat[6] = 95 // 64-128us

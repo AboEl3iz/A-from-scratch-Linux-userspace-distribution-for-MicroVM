@@ -16,7 +16,6 @@ import (
 	"karim-microvm-os/internal/svcd"
 	"karim-microvm-os/internal/system"
 	"karim-microvm-os/internal/vsockd"
-
 )
 
 const defaultServiceDir = "/etc/karim/services"
@@ -105,7 +104,6 @@ func main() {
 		fmt.Printf("[karim-svcd] System status verified: entropy=%d bits, rtc=%v, debug=%v\n",
 			sysStat.EntropyAvail, sysStat.RTCSynced, sysStat.DebugMode)
 	}
-
 
 	// 1. Storage Overlay Setup (Phase 2 Component)
 	if *enableOverlayFlag {
@@ -244,4 +242,3 @@ func main() {
 		}
 	}
 }
-

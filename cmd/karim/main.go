@@ -16,7 +16,6 @@ import (
 	"karim-microvm-os/internal/snapshot"
 	"karim-microvm-os/internal/system"
 	"karim-microvm-os/internal/vsockd"
-
 )
 
 const asciiLogo = `
@@ -116,7 +115,6 @@ func main() {
 
 	case "system", "status", "hardd":
 		runSystem(*targetFlag)
-
 
 	default:
 		fmt.Fprintf(os.Stderr, "Error: unknown command %q. Run 'karim help' for options.\n", command)
@@ -789,6 +787,3 @@ func runSystem(target string) {
 	}
 	fmt.Println("======================================================================")
 }
-
-
-

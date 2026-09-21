@@ -55,7 +55,7 @@ func BuildHermeticSquashFS(opts SquashFSOptions) error {
 	}
 
 	cmd := exec.Command(mksquashfsPath, args...)
-	
+
 	// Inject SOURCE_DATE_EPOCH environment variable for sub-tooling reproducibility
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("SOURCE_DATE_EPOCH=%d", opts.FixedTime))

@@ -14,7 +14,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-
 // NetworkConfig defines the IPv4 network parameters for a guest network interface.
 type NetworkConfig struct {
 	InterfaceName string
