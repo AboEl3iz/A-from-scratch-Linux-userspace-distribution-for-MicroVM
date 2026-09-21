@@ -210,6 +210,49 @@ make run-debug
 
 ---
 
+## DevSecOps & CI Pipeline Architecture
+
+**Karim MicroVM OS** features an enterprise-grade, multi-stage **DevSecOps GitHub Actions CI/CD pipeline** ([.github/workflows/ci-devsecops.yml](file:///media/karim/New%20Volume16/go/linux_distribution/.github/workflows/ci-devsecops.yml)) designed specifically for systems and OS-level distribution development.
+
+### Pipeline Stages
+
+1. **Code Quality & Formatting Gate**:
+   - Automated Go formatting (`gofmt -s`) & module integrity check (`go mod tidy`).
+   - ShellScript linting (`shellcheck`) for all phase test harnesses.
+   - GCC static analysis on the static C PID 1 bootloader (`init/init.c`).
+
+2. **DevSecOps & Security Hardening Suite**:
+   - **Go Security SAST (`gosec`)**: Scans Go microservices for unsafe syscalls, memory flaws, and insecure permissions.
+   - **Secret Scanning (`gitleaks`)**: Prevents leaks of API tokens or embedded certificates.
+   - **Vulnerability Audit (`govulncheck` & `trivy`)**: Scans Go dependencies and OS packages against official security advisories.
+   - **Supply Chain Security (`syft`)**: Generates standardized **SPDX-JSON Software Bill of Materials (SBOM)** artifacts.
+
+3. **Unit Testing & Race Detection Matrix**:
+   - Executes `go test -race` on all sub-packages in `./internal/...`.
+   - Generates line-by-line coverage reports published to GitHub Action summaries.
+
+4. **100% Bit-for-Bit Reproducible Build Audit**:
+   - Compiles static C init, Go microservices, initramfs, and rootfs images.
+   - Runs `make verify-reproducible` in CI to ensure 100% SHA-256 byte-for-byte build reproducibility across clean passes.
+
+5. **Parallelized Phase 0 - Phase 9 Integration Test Matrix**:
+   - Runs a 10-node matrix executing all automated phase test suites in parallel (`testing/manual_test_phase0.sh` to `testing/manual_test_phase9.sh`).
+
+6. **Release & Supply Chain Pipeline** ([.github/workflows/release.yml](file:///media/karim/New%20Volume16/go/linux_distribution/.github/workflows/release.yml)):
+   - Triggered automatically on git tags (`v*`).
+   - Generates production releases with compiled CLI binaries, CPIO initramfs, SquashFS rootfs, SHA-256 checksums, and SBOM manifests.
+
+### Local DevSecOps Verification
+
+Developers can run the complete quality and security audit locally prior to pushing code:
+```bash
+make devsecops-check
+```
+
+---
+
+
+
 ## Project Structure
 
 ```
