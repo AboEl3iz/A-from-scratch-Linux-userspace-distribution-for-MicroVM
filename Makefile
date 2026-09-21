@@ -80,6 +80,7 @@ kernel: "$(DIST_DIR)/bzImage" ## Download and compile minimal Linux kernel bzIma
 # ------------------------------------------------------------------------------
 SAMPLE_APP_BIN := $(BUILD_DIR)/sample_app
 HTTPD_APP_BIN  := $(BUILD_DIR)/httpd
+KV_STORE_BIN   := $(BUILD_DIR)/kv_store
 
 "$(INIT_BIN)": init/init.c
 	@mkdir -p "$(BUILD_DIR)"
@@ -187,7 +188,7 @@ QEMU_ARGS := -m 512M \
 	-kernel $(DIST_DIR)/bzImage \
 	-initrd $(INITRD_CPIO) \
 	-drive file=$(ROOTFS_IMG),if=virtio,format=raw,readonly=on \
-	-netdev user,id=net0 \
+	-netdev user,id=net0,hostfwd=tcp::8080-:8080,hostfwd=tcp::8000-:80 \
 	-device virtio-net-pci,netdev=net0 \
 	-device virtio-rng-pci \
 	-qmp unix:$(QMP_SOCKET),server,nowait \
@@ -258,6 +259,16 @@ test-phase8: ## Run Phase 8 automated test harness
 
 test-phase9: ## Run Phase 9 automated test harness
 	@bash testing/manual_test_phase9.sh
+
+test-all: test test-phase0 test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-phase7 test-phase8 test-phase9 ## Run complete unit and integration test suite across all 10 phases
+
+devsecops-check: test verify-reproducible ## Run complete local DevSecOps quality, security and reproducibility audit
+	@echo "==> Running local DevSecOps verification..."
+	@UNFORMATTED=$$(gofmt -l .); if [ -n "$$UNFORMATTED" ]; then echo "ERROR: Unformatted files found:"; echo "$$UNFORMATTED"; exit 1; fi
+	@go vet ./...
+	@echo "✓ All local DevSecOps checks PASSED."
+
+
 
 
 
