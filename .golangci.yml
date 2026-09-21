@@ -1,0 +1,29 @@
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - revive
+    - exportloopref
+    - misspell
+
+linters-settings:
+  govet:
+    enable-all: true
+  gosec:
+    severity: "medium"
+    confidence: "medium"
+  revive:
+    severity: warning
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
