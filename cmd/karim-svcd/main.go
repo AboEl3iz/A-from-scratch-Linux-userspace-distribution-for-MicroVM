@@ -91,6 +91,53 @@ func (sb *supervisorBridge) Unquiesce() error {
 	return nil
 }
 
+// LoadService parses an in-memory TOML service definition and launches the service
+// in the live supervisor without requiring a MicroVM reboot.
+func (sb *supervisorBridge) LoadService(configTOML string) error {
+	spec, err := svcd.ParseServiceSpecFromBytes([]byte(configTOML))
+	if err != nil {
+		return fmt.Errorf("failed to parse service TOML payload: %w", err)
+	}
+
+	fmt.Printf("[karim-svcd] Hot-loading service %q from VSOCK payload...\n", spec.Name)
+
+	// Initialize cgroup manager for this new service
+	cgm, err := svcd.NewCGroupManager()
+	if err != nil {
+		fmt.Printf("[karim-svcd] Warning: cgroup manager init failed for %s: %v\n", spec.Name, err)
+	}
+
+	ms := svcd.NewManagedService(spec, cgm)
+
+	// If a service with this name is already running, stop it first (rolling update)
+	sb.mu.Lock()
+	if existing, ok := sb.managedServices[spec.Name]; ok {
+		fmt.Printf("[karim-svcd] Replacing existing service %q (rolling update)...\n", spec.Name)
+		_ = existing.Stop()
+	}
+	sb.managedServices[spec.Name] = ms
+	sb.mu.Unlock()
+
+	if err := ms.Start(); err != nil {
+		return fmt.Errorf("failed to start hot-loaded service %s: %w", spec.Name, err)
+	}
+
+	// Persist the service TOML into /etc/karim/services/ so it survives a future supervisor restart
+	serviceDir := defaultServiceDir
+	_ = os.MkdirAll(serviceDir, 0755)
+	destPath := filepath.Join(serviceDir, spec.Name+".toml")
+	if err := os.WriteFile(destPath, []byte(configTOML), 0644); err != nil {
+		fmt.Printf("[karim-svcd] Notice: could not persist service config to %s: %v\n", destPath, err)
+	} else {
+		fmt.Printf("[karim-svcd] Persisted service config to %s\n", destPath)
+	}
+
+	fmt.Printf("[karim-svcd] Service %q hot-loaded and running (PID: %d)\n", spec.Name, ms.Cmd.Process.Pid)
+	return nil
+}
+
+
+
 func main() {
 	serviceDirFlag := flag.String("config-dir", defaultServiceDir, "Directory containing TOML service definitions")
 	enableNetFlag := flag.Bool("enable-net", true, "Automatically configure virtio-net interface via netlink")
