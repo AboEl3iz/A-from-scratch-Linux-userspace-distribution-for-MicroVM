@@ -26,6 +26,8 @@ func (m *mockVSock) StopService(name string) error              { return nil }
 func (m *mockVSock) GetServiceLogs(name string) (string, error) { return "", nil }
 func (m *mockVSock) Quiesce() error                             { m.quiesced = true; return nil }
 func (m *mockVSock) Unquiesce() error                           { m.quiesced = false; return nil }
+func (m *mockVSock) LoadService(configTOML string) error        { return nil }
+
 
 type mockQMPServer struct {
 	mu        sync.Mutex
