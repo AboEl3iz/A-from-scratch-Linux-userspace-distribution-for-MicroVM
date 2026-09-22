@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -92,11 +93,11 @@ func SetLinkUp(ifaceName string) error {
 		return fmt.Errorf("interface %s not found: %w", ifaceName, err)
 	}
 
-	fd, err := openNetlinkSocket()
+	file, err := openNetlinkSocketNonBlock()
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer file.Close()
 
 	req := struct {
 		Header unix.NlMsghdr
@@ -117,11 +118,15 @@ func SetLinkUp(ifaceName string) error {
 	}
 
 	buf := (*[unsafe.Sizeof(req)]byte)(unsafe.Pointer(&req))[:]
-	if err := unix.Sendto(fd, buf, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+	if err := unix.Sendto(int(file.Fd()), buf, 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("netlink sendto failed: %w", err)
 	}
 
-	return readNetlinkAck(fd, 1)
+	if err := readNetlinkAckPersistent(file, 1, 2*time.Second); err != nil {
+		return err
+	}
+
+	return VerifyInterfaceUp(ifaceName)
 }
 
 // SetInterfaceIP assigns an IPv4 address and subnet prefix to the interface using RTM_NEWADDR.
@@ -136,11 +141,11 @@ func SetInterfaceIP(ifaceName, ipStr string, cidr int) error {
 		return fmt.Errorf("invalid IPv4 address: %s", ipStr)
 	}
 
-	fd, err := openNetlinkSocket()
+	file, err := openNetlinkSocketNonBlock()
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer file.Close()
 
 	var buf bytes.Buffer
 
@@ -171,11 +176,11 @@ func SetInterfaceIP(ifaceName, ipStr string, cidr int) error {
 	buf.Write(attrLocal)
 	buf.Write(attrAddress)
 
-	if err := unix.Sendto(fd, buf.Bytes(), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+	if err := unix.Sendto(int(file.Fd()), buf.Bytes(), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("sendto RTM_NEWADDR failed: %w", err)
 	}
 
-	return readNetlinkAck(fd, 2)
+	return readNetlinkAckPersistent(file, 2, 2*time.Second)
 }
 
 // SetDefaultGateway adds a default IPv4 route (0.0.0.0/0) pointing to gatewayIP on ifaceName.
@@ -190,11 +195,11 @@ func SetDefaultGateway(gatewayIP string, ifaceName string) error {
 		return fmt.Errorf("invalid gateway IP: %s", gatewayIP)
 	}
 
-	fd, err := openNetlinkSocket()
+	file, err := openNetlinkSocketNonBlock()
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer file.Close()
 
 	var buf bytes.Buffer
 
@@ -228,11 +233,11 @@ func SetDefaultGateway(gatewayIP string, ifaceName string) error {
 	buf.Write(attrGw)
 	buf.Write(attrOif)
 
-	if err := unix.Sendto(fd, buf.Bytes(), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
+	if err := unix.Sendto(int(file.Fd()), buf.Bytes(), 0, &unix.SockaddrNetlink{Family: unix.AF_NETLINK}); err != nil {
 		return fmt.Errorf("sendto RTM_NEWROUTE failed: %w", err)
 	}
 
-	return readNetlinkAck(fd, 3)
+	return readNetlinkAckPersistent(file, 3, 2*time.Second)
 }
 
 // WriteResolvConf outputs nameserver directives into path (default /etc/resolv.conf).
@@ -257,24 +262,31 @@ func WriteResolvConf(dnsServers []string, path string) error {
 	return os.WriteFile(path, []byte(content.String()), 0644)
 }
 
-// Helper functions for raw netlink socket operations
+// Helper functions for non-blocking netlink socket operations integrated with Go netpoller
 
-func openNetlinkSocket() (int, error) {
-	fd, err := unix.Socket(unix.AF_NETLINK, unix.SOCK_RAW, unix.NETLINK_ROUTE)
+func openNetlinkSocketNonBlock() (*os.File, error) {
+	fd, err := unix.Socket(
+		unix.AF_NETLINK,
+		unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC,
+		unix.NETLINK_ROUTE,
+	)
 	if err != nil {
-		return -1, fmt.Errorf("failed to open AF_NETLINK socket: %w", err)
+		return nil, fmt.Errorf("failed to create non-blocking netlink socket: %w", err)
 	}
 
-	sa := &unix.SockaddrNetlink{
-		Family: unix.AF_NETLINK,
-	}
-
+	sa := &unix.SockaddrNetlink{Family: unix.AF_NETLINK}
 	if err := unix.Bind(fd, sa); err != nil {
 		unix.Close(fd)
-		return -1, fmt.Errorf("failed to bind netlink socket: %w", err)
+		return nil, fmt.Errorf("failed to bind netlink socket: %w", err)
 	}
 
-	return fd, nil
+	file := os.NewFile(uintptr(fd), "netlink-socket")
+	if file == nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("failed to wrap netlink socket in os.File")
+	}
+
+	return file, nil
 }
 
 func encodeRtAttr(attrType uint16, data []byte) []byte {
@@ -289,34 +301,74 @@ func encodeRtAttr(attrType uint16, data []byte) []byte {
 	return buf
 }
 
-func readNetlinkAck(fd int, expectedSeq uint32) error {
-	rb := make([]byte, 4096)
-	n, _, err := unix.Recvfrom(fd, rb, 0)
-	if err != nil {
-		return fmt.Errorf("recvfrom netlink ack failed: %w", err)
+func readNetlinkAckPersistent(file *os.File, expectedSeq uint32, timeout time.Duration) error {
+	if err := file.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+		return fmt.Errorf("failed to set netlink read deadline: %w", err)
 	}
 
-	msgs, err := syscall.ParseNetlinkMessage(rb[:n])
+	rawConn, err := file.SyscallConn()
 	if err != nil {
-		return fmt.Errorf("parse netlink msg failed: %w", err)
+		return fmt.Errorf("failed to get syscall conn: %w", err)
 	}
 
-	for _, msg := range msgs {
-		if msg.Header.Seq != expectedSeq {
-			continue
-		}
+	rb := make([]byte, 8192)
 
-		if msg.Header.Type == unix.NLMSG_ERROR {
-			if len(msg.Data) >= 4 {
-				errno := int32(binary.LittleEndian.Uint32(msg.Data[:4]))
-				if errno != 0 {
-					// errno is negative Linux error code (e.g. -EEXIST)
-					return fmt.Errorf("netlink error: %w", unix.Errno(-errno))
-				}
+	for {
+		var n int
+		var recvErr error
+
+		err := rawConn.Read(func(fd uintptr) bool {
+			n, _, recvErr = unix.Recvfrom(int(fd), rb, 0)
+			if recvErr == unix.EAGAIN || recvErr == unix.EWOULDBLOCK {
+				return false
 			}
-			return nil // Ack success (errno 0)
+			return true
+		})
+
+		if err != nil {
+			return fmt.Errorf("netlink read timed out or failed: %w", err)
 		}
+		if recvErr != nil {
+			return fmt.Errorf("recvfrom netlink ack failed: %w", recvErr)
+		}
+
+		msgs, err := syscall.ParseNetlinkMessage(rb[:n])
+		if err != nil {
+			return fmt.Errorf("parse netlink msg failed: %w", err)
+		}
+
+		for _, msg := range msgs {
+			if msg.Header.Seq != expectedSeq {
+				continue
+			}
+
+			if msg.Header.Type == unix.NLMSG_ERROR {
+				if len(msg.Data) >= 4 {
+					errno := int32(binary.LittleEndian.Uint32(msg.Data[:4]))
+					if errno != 0 {
+						return fmt.Errorf("netlink error: %w", unix.Errno(-errno))
+					}
+				}
+				return nil
+			}
+		}
+	}
+}
+
+// VerifyInterfaceUp checks /sys/class/net/<iface>/operstate to independently confirm link state.
+func VerifyInterfaceUp(ifaceName string) error {
+	path := fmt.Sprintf("/sys/class/net/%s/operstate", ifaceName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// If sysfs entry doesn't exist yet or is inaccessible, fallback gracefully
+		return nil
+	}
+
+	state := strings.TrimSpace(string(data))
+	if state != "up" && state != "unknown" && state != "lowerup" {
+		return fmt.Errorf("interface %s operstate is %q (expected 'up', 'unknown', or 'lowerup')", ifaceName, state)
 	}
 
 	return nil
 }
+
