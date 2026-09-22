@@ -76,6 +76,19 @@ func (m *mockServiceProvider) Unquiesce() error {
 	return nil
 }
 
+func (m *mockServiceProvider) LoadService(configTOML string) error {
+	// Parse the name from the payload and register a mock service
+	for _, line := range []string{} {
+		_ = line
+	}
+	// For the mock, simply accept any non-empty payload
+	if configTOML == "" {
+		return fmt.Errorf("empty TOML payload")
+	}
+	return nil
+}
+
+
 func TestVSockRPC_ServerClient(t *testing.T) {
 	tmpDir := t.TempDir()
 	socketPath := filepath.Join(tmpDir, "vsock_test.sock")
