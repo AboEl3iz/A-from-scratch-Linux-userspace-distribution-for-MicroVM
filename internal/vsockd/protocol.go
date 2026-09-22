@@ -12,9 +12,11 @@ const MaxFrameSize = 10 * 1024 * 1024 // 10MB max RPC payload size
 // RPCRequest represents an incoming command frame sent to karim-vsockd.
 type RPCRequest struct {
 	ID      string   `json:"id"`
-	Command string   `json:"command"` // "ping", "list_services", "start_service", "stop_service", "get_logs", "get_metrics"
+	Command string   `json:"command"` // "ping", "list_services", "start_service", "stop_service", "get_logs", "get_metrics", "load_service", "run_service"
 	Service string   `json:"service,omitempty"`
 	Args    []string `json:"args,omitempty"`
+	// Payload carries inline TOML config or JSON spec for load_service / run_service commands.
+	Payload string `json:"payload,omitempty"`
 }
 
 // RPCResponse represents an outgoing result frame returned by karim-vsockd.
