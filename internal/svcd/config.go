@@ -154,7 +154,119 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 	return spec, nil
 }
 
-// LoadServiceDir scans a directory for *.toml files and returns all parsed ServiceSpecs.
+// ParseServiceSpecFromBytes parses a TOML service definition from an in-memory byte slice.
+// This is used for zero-reboot hot-reloading: the CLI sends a TOML file payload over AF_VSOCK
+// and the supervisor parses it in memory without requiring a filesystem write or reboot.
+func ParseServiceSpecFromBytes(data []byte) (*ServiceSpec, error) {
+	spec := &ServiceSpec{
+		Restart:        "on-failure",
+		SeccompProfile: "app-default",
+		NoNewPrivs:     true,
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	lineNum := 0
+	currentSection := ""
+
+	for scanner.Scan() {
+		lineNum++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if idx := strings.Index(line, "#"); idx >= 0 {
+			inQuotes := false
+			quoteChar := byte(0)
+			for i := 0; i < idx; i++ {
+				if (line[i] == '"' || line[i] == '\'') && (i == 0 || line[i-1] != '\\') {
+					if !inQuotes {
+						inQuotes = true
+						quoteChar = line[i]
+					} else if line[i] == quoteChar {
+						inQuotes = false
+					}
+				}
+			}
+			if !inQuotes {
+				line = strings.TrimSpace(line[:idx])
+				if line == "" {
+					continue
+				}
+			}
+		}
+
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			currentSection = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+			continue
+		}
+
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+
+		if currentSection == "env" || currentSection == "environment" {
+			spec.Env = append(spec.Env, fmt.Sprintf("%s=%s", key, unquote(val)))
+			continue
+		}
+
+		switch strings.ToLower(key) {
+		case "name":
+			spec.Name = unquote(val)
+		case "exec":
+			spec.Exec = unquote(val)
+		case "args":
+			spec.Args = parseArray(val)
+		case "env", "environment":
+			spec.Env = append(spec.Env, parseArray(val)...)
+		case "directory":
+			spec.Directory = unquote(val)
+		case "after":
+			spec.After = parseArray(val)
+		case "memory_limit":
+			bytes, err := parseMemoryLimit(unquote(val))
+			if err != nil {
+				return nil, fmt.Errorf("line %d: invalid memory_limit %q: %w", lineNum, val, err)
+			}
+			spec.MemoryLimit = bytes
+		case "cpu_quota":
+			quota, err := parseCPUQuota(unquote(val))
+			if err != nil {
+				return nil, fmt.Errorf("line %d: invalid cpu_quota %q: %w", lineNum, val, err)
+			}
+			spec.CPUQuota = quota
+		case "restart":
+			spec.Restart = unquote(val)
+		case "seccomp_profile":
+			spec.SeccompProfile = unquote(val)
+		case "capabilities_add", "capabilities.add":
+			spec.CapabilitiesAdd = parseArray(val)
+		case "capabilities_drop", "capabilities.drop":
+			spec.CapabilitiesDrop = parseArray(val)
+		case "no_new_privs":
+			spec.NoNewPrivs = parseBool(val)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error scanning TOML config bytes: %w", err)
+	}
+
+	if spec.Exec == "" {
+		return nil, fmt.Errorf("service config missing mandatory 'exec' binary path")
+	}
+	if spec.Name == "" {
+		return nil, fmt.Errorf("service config missing mandatory 'name' field")
+	}
+
+	return spec, nil
+}
+
+
 func LoadServiceDir(dir string) ([]*ServiceSpec, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
