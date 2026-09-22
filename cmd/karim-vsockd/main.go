@@ -119,6 +119,28 @@ func (b *svcdBridge) Unquiesce() error {
 	return nil
 }
 
+// LoadService parses an in-memory TOML service definition and launches it live without a reboot.
+func (b *svcdBridge) LoadService(configTOML string) error {
+	spec, err := svcd.ParseServiceSpecFromBytes([]byte(configTOML))
+	if err != nil {
+		return fmt.Errorf("failed to parse service TOML payload: %w", err)
+	}
+
+	fmt.Printf("[karim-vsockd] Hot-loading service %q from VSOCK payload...\n", spec.Name)
+
+	ms := svcd.NewManagedService(spec, b.cgm)
+
+	b.mu.Lock()
+	if existing, ok := b.services[spec.Name]; ok {
+		_ = existing.Stop()
+	}
+	b.services[spec.Name] = ms
+	b.mu.Unlock()
+
+	return ms.Start()
+}
+
+
 func main() {
 	portFlag := flag.Uint("port", uint(vsockd.DefaultVSockPort), "AF_VSOCK port to listen on")
 	socketFlag := flag.String("socket", "/run/karim/vsock.sock", "Unix Domain Socket path fallback")
