@@ -81,6 +81,7 @@ kernel: "$(DIST_DIR)/bzImage" ## Download and compile minimal Linux kernel bzIma
 SAMPLE_APP_BIN := $(BUILD_DIR)/sample_app
 HTTPD_APP_BIN  := $(BUILD_DIR)/httpd
 KV_STORE_BIN   := $(BUILD_DIR)/kv_store
+SH_BIN         := $(BUILD_DIR)/sh
 
 "$(INIT_BIN)": init/init.c
 	@mkdir -p "$(BUILD_DIR)"
@@ -90,6 +91,11 @@ KV_STORE_BIN   := $(BUILD_DIR)/kv_store
 	@echo "==> Static init binary size: $$(du -h "$@" | cut -f1)"
 
 init: "$(INIT_BIN)" ## Build static C init and workload binaries
+	@if [ -f init/sh.c ]; then \
+		echo "==> Compiling static C shell binary (/bin/sh) with GCC..."; \
+		gcc $(CFLAGS) -o "$(SH_BIN)" init/sh.c; \
+		strip "$(SH_BIN)"; \
+	fi
 	@if [ -f init/sample_app.c ]; then \
 		echo "==> Compiling static sample application binary with GCC..."; \
 		gcc $(CFLAGS) -o "$(SAMPLE_APP_BIN)" init/sample_app.c; \
