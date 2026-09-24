@@ -816,6 +816,11 @@ func runApply(target, tomlPath string) {
 		os.Exit(1)
 	}
 
+	if len(strings.TrimSpace(string(tomlBytes))) == 0 {
+		fmt.Fprintf(os.Stderr, "Error: TOML file %q is empty (0 bytes).\n", tomlPath)
+		os.Exit(1)
+	}
+
 	conn, err := vsockd.Dial(target)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed connecting to %s: %v\n", target, err)
