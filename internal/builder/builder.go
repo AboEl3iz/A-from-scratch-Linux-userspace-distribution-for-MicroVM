@@ -118,9 +118,9 @@ func BuildImagePipeline(cfg BuildConfig) (*BuildManifest, error) {
 		return nil, fmt.Errorf("failed staging karim-svcd binary: %w", err)
 	}
 
-	// Copy workload C binaries (sample_app, httpd, kv_store)
+	// Copy workload C binaries (sample_app, httpd, kv_store, sh)
 	buildDir = filepath.Dir(cfg.InitBinPath)
-	for _, binName := range []string{"sample_app", "httpd", "kv_store"} {
+	for _, binName := range []string{"sample_app", "httpd", "kv_store", "sh"} {
 		srcBin := filepath.Join(buildDir, binName)
 		if _, err := os.Stat(srcBin); err == nil {
 			_ = copyFileExecutable(srcBin, filepath.Join(initramfsStaging, "bin", binName))
