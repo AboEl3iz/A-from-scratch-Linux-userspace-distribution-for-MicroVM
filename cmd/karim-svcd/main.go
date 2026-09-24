@@ -189,37 +189,15 @@ func main() {
 		managedServices: make(map[string]*svcd.ManagedService),
 	}
 
-	if len(specs) == 0 {
-		fmt.Println("[karim-svcd] No service definitions found. Running empty supervisor loop.")
-	} else {
-		fmt.Printf("[karim-svcd] Loaded %d service specification(s).\n", len(specs))
-
-		// 5. Resolve DAG topological startup order
-		graph := svcd.NewDependencyGraph(specs)
-		orderedSpecs, err := graph.ResolveTopologicalSort()
-		if err != nil {
-			fmt.Printf("[karim-svcd] ERROR resolving service dependency graph: %v\n", err)
-			os.Exit(1)
-		}
-
-		// 6. Start managed services in topological order
-		for _, spec := range orderedSpecs {
-			fmt.Printf("[karim-svcd] Starting service %s (depends on: %v)...\n", spec.Name, spec.After)
-			ms := svcd.NewManagedService(spec, cgm)
-			bridge.managedServices[spec.Name] = ms
-			if err := ms.Start(); err != nil {
-				fmt.Printf("[karim-svcd] ERROR starting service %s: %v\n", spec.Name, err)
-			}
-			time.Sleep(100 * time.Millisecond) // Stagger start slightly
-		}
-	}
-
-	// 7. Start vsockd Control Plane RPC Server (Phase 4 Component)
+	// 5. Start vsockd Control Plane RPC Server (Phase 4 Component)
 	if *enableVsockdFlag {
 		fmt.Println("[karim-svcd] Initializing vsockd host-guest control plane RPC server...")
 		rpcServer := vsockd.NewServer(bridge)
 
 		socketPath := "/run/karim/vsock.sock"
+		if envSock := os.Getenv("KARIM_UNIX_SOCKET"); envSock != "" {
+			socketPath = envSock
+		}
 		_ = os.MkdirAll(filepath.Dir(socketPath), 0755)
 
 		if vsockd.IsVSockSupported() {
@@ -241,6 +219,33 @@ func main() {
 			go func(lis net.Listener) {
 				_ = rpcServer.Serve(lis)
 			}(l)
+		} else {
+			fmt.Printf("[karim-svcd] Warning: failed to listen on Unix control socket %s: %v\n", socketPath, err)
+		}
+	}
+
+	if len(specs) == 0 {
+		fmt.Println("[karim-svcd] No service definitions found. Running empty supervisor loop.")
+	} else {
+		fmt.Printf("[karim-svcd] Loaded %d service specification(s).\n", len(specs))
+
+		// 6. Resolve DAG topological startup order
+		graph := svcd.NewDependencyGraph(specs)
+		orderedSpecs, err := graph.ResolveTopologicalSort()
+		if err != nil {
+			fmt.Printf("[karim-svcd] ERROR resolving service dependency graph: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 7. Start managed services in topological order
+		for _, spec := range orderedSpecs {
+			fmt.Printf("[karim-svcd] Starting service %s (depends on: %v)...\n", spec.Name, spec.After)
+			ms := svcd.NewManagedService(spec, cgm)
+			bridge.managedServices[spec.Name] = ms
+			if err := ms.Start(); err != nil {
+				fmt.Printf("[karim-svcd] ERROR starting service %s: %v\n", spec.Name, err)
+			}
+			time.Sleep(100 * time.Millisecond) // Stagger start slightly
 		}
 	}
 
@@ -270,18 +275,24 @@ func main() {
 				if err != nil || pid <= 0 {
 					break
 				}
-				// Check if PID belongs to a managed service to avoid false 'orphan' log message
-				isManaged := false
+				// Check if PID belongs to a managed service
+				var matchedMS *svcd.ManagedService
 				bridge.mu.RLock()
 				for _, ms := range bridge.managedServices {
 					if ms.Cmd != nil && ms.Cmd.Process != nil && ms.Cmd.Process.Pid == pid {
-						isManaged = true
+						matchedMS = ms
 						break
 					}
 				}
 				bridge.mu.RUnlock()
 
-				if !isManaged {
+				if matchedMS != nil {
+					exitCode := wstatus.ExitStatus()
+					if wstatus.Signaled() {
+						exitCode = 128 + int(wstatus.Signal())
+					}
+					matchedMS.RecordExitStatus(exitCode)
+				} else {
 					fmt.Printf("[karim-svcd] Reaped orphan zombie process (PID %d)\n", pid)
 				}
 			}
