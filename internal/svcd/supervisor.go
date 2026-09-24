@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -40,11 +41,21 @@ func (s ProcessState) String() string {
 
 // ManagedService represents a runtime instance of a service.
 type ManagedService struct {
-	Spec      *ServiceSpec
-	State     ProcessState
-	Cmd       *exec.Cmd
-	CGroupMgr *CGroupManager
-	mu        sync.Mutex
+	Spec         *ServiceSpec
+	State        ProcessState
+	Cmd          *exec.Cmd
+	CGroupMgr        *CGroupManager
+	mu               sync.Mutex
+	restartCount     int
+	exitCodeRecorded bool
+	recordedExitCode int
+}
+
+func (ms *ManagedService) RecordExitStatus(exitCode int) {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+	ms.exitCodeRecorded = true
+	ms.recordedExitCode = exitCode
 }
 
 // NewManagedService creates a new supervisor handle for a service.
@@ -69,6 +80,22 @@ func (ms *ManagedService) Start() error {
 
 	execPath := ms.Spec.Exec
 	execArgs := ms.Spec.Args
+
+	// Pre-flight check: Verify target executable exists before launching secd wrapper or process
+	targetCheckPath := execPath
+	if ms.Spec.RootDir != "" {
+		targetCheckPath = filepath.Join(ms.Spec.RootDir, execPath)
+	}
+	if _, err := os.Stat(targetCheckPath); err != nil {
+		buildFallback := filepath.Join("build", filepath.Base(execPath))
+		if _, errBuild := os.Stat(buildFallback); errBuild == nil {
+			execPath = buildFallback
+			targetCheckPath = buildFallback
+		} else if _, errPath := exec.LookPath(execPath); errPath != nil {
+			ms.State = StateStopped
+			return fmt.Errorf("executable %q not found on rootfs (import container layer via 'karim import')", execPath)
+		}
+	}
 
 	// Check if karim-secd isolation wrapper binary exists
 	secdBin := "/sbin/karim-secd"
@@ -112,7 +139,18 @@ func (ms *ManagedService) Start() error {
 		"TMPDIR=/tmp",
 	}
 	cmd.Env = append(defaultEnv, ms.Spec.Env...)
-	cmd.SysProcAttr = SetupChildProcAttr()
+
+	// Wire RootDir into SysProcAttr.Chroot so that exec paths like /bin/sh resolve
+	// inside the container layer mount rather than the host merged rootfs.
+	procAttr := SetupChildProcAttr()
+	if ms.Spec.RootDir != "" {
+		procAttr.Chroot = ms.Spec.RootDir
+		// When chroot is active, the working directory must be relative to the new root.
+		if cmd.Dir == "" {
+			cmd.Dir = "/"
+		}
+	}
+	cmd.SysProcAttr = procAttr
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -177,10 +215,20 @@ func (ms *ManagedService) monitor() {
 	ms.mu.Lock()
 	ms.State = StateTerminated
 	exitCode := 0
-	if err != nil {
+	if ms.exitCodeRecorded {
+		exitCode = ms.recordedExitCode
+		if exitCode != 0 {
+			fmt.Printf("[karim-svcd] Service %s exited with status %d\n", ms.Spec.Name, exitCode)
+		} else {
+			fmt.Printf("[karim-svcd] Service %s exited cleanly (code 0)\n", ms.Spec.Name)
+		}
+	} else if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			exitCode = exitErr.ExitCode()
 			fmt.Printf("[karim-svcd] Service %s exited with status %d: %v\n", ms.Spec.Name, exitCode, err)
+		} else if strings.Contains(err.Error(), "no child processes") {
+			exitCode = 1
+			fmt.Printf("[karim-svcd] Service %s exited (status captured by supervisor)\n", ms.Spec.Name)
 		} else {
 			exitCode = 1
 			fmt.Printf("[karim-svcd] Service %s exited: %v\n", ms.Spec.Name, err)
@@ -188,7 +236,6 @@ func (ms *ManagedService) monitor() {
 	} else {
 		fmt.Printf("[karim-svcd] Service %s exited cleanly (code 0)\n", ms.Spec.Name)
 	}
-
 	ms.mu.Unlock()
 
 	// Handle restart policies
@@ -202,12 +249,53 @@ func (ms *ManagedService) monitor() {
 		}
 	}
 
-	if shouldRestart {
-		fmt.Printf("[karim-svcd] Restart policy '%s' active for %s. Restarting in 1s...\n", ms.Spec.Restart, ms.Spec.Name)
-		time.Sleep(1 * time.Second)
-		_ = ms.Start()
+	if !shouldRestart {
+		return
 	}
+
+	// Crashloop protection: enforce MaxRestarts limit.
+	// MaxRestarts == 0 means unlimited (backwards-compatible default).
+	ms.mu.Lock()
+	ms.restartCount++
+	count := ms.restartCount
+	ms.mu.Unlock()
+
+	if ms.Spec.MaxRestarts > 0 && count > ms.Spec.MaxRestarts {
+		fmt.Printf("[karim-svcd] Service %s exceeded max_restarts=%d (attempt %d). Will not restart.\n",
+			ms.Spec.Name, ms.Spec.MaxRestarts, count)
+		return
+	}
+
+	// Exponential backoff: 1s, 2s, 4s, 8s, ... up to 30s cap.
+	// This prevents a permanently broken binary (e.g. exec ENOENT) from
+	// burning CPU in a tight loop and flooding logs.
+	backoff := time.Duration(1<<min(count-1, 5)) * time.Second // 1s to 32s, cap at 30s
+	if backoff > 30*time.Second {
+		backoff = 30 * time.Second
+	}
+
+	fmt.Printf("[karim-svcd] Restart policy '%s' active for %s (attempt %d/%s). Restarting in %v...\n",
+		ms.Spec.Restart, ms.Spec.Name, count, maxRestartsLabel(ms.Spec.MaxRestarts), backoff)
+
+	time.Sleep(backoff)
+	_ = ms.Start()
 }
+
+func maxRestartsLabel(max int) string {
+	if max == 0 {
+		return "∞"
+	}
+	return fmt.Sprintf("%d", max)
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+
 
 func streamLogs(prefix string, reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
