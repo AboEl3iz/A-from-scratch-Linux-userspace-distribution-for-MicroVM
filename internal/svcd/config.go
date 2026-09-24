@@ -16,10 +16,16 @@ type ServiceSpec struct {
 	Args             []string `json:"args"`
 	Env              []string `json:"env"`
 	Directory        string   `json:"directory"`
+	// RootDir, if set, causes the service to be launched inside a chroot(2) of this path.
+	// Use this when running a service whose binary lives inside an OCI container layer mount,
+	// e.g. root_dir = "/mnt/layers/alpine" so that exec = "/bin/sh" resolves inside alpine.
+	RootDir          string   `json:"root_dir"`
 	After            []string `json:"after"`
 	MemoryLimit      int64    `json:"memory_limit"` // Bytes (0 means unlimited)
 	CPUQuota         float64  `json:"cpu_quota"`    // Percentage (e.g. 50.0 for 50%)
 	Restart          string   `json:"restart"`      // "always", "on-failure", "never"
+	// MaxRestarts limits restart attempts. 0 = unlimited. Prevents infinite crashloops.
+	MaxRestarts      int      `json:"max_restarts"`
 	SeccompProfile   string   `json:"seccomp_profile"`
 	CapabilitiesAdd  []string `json:"capabilities_add"`
 	CapabilitiesDrop []string `json:"capabilities_drop"`
@@ -104,6 +110,8 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 			spec.Env = append(spec.Env, parseArray(val)...)
 		case "directory":
 			spec.Directory = unquote(val)
+		case "root_dir", "rootdir", "chroot":
+			spec.RootDir = unquote(val)
 		case "after":
 			spec.After = parseArray(val)
 		case "memory_limit":
@@ -120,6 +128,10 @@ func ParseServiceConfig(path string) (*ServiceSpec, error) {
 			spec.CPUQuota = quota
 		case "restart":
 			spec.Restart = unquote(val)
+		case "max_restarts":
+			if n, err := strconv.Atoi(strings.TrimSpace(unquote(val))); err == nil {
+				spec.MaxRestarts = n
+			}
 		case "seccomp_profile":
 			spec.SeccompProfile = unquote(val)
 		case "capabilities_add", "capabilities.add":
@@ -225,6 +237,8 @@ func ParseServiceSpecFromBytes(data []byte) (*ServiceSpec, error) {
 			spec.Env = append(spec.Env, parseArray(val)...)
 		case "directory":
 			spec.Directory = unquote(val)
+		case "root_dir", "rootdir", "chroot":
+			spec.RootDir = unquote(val)
 		case "after":
 			spec.After = parseArray(val)
 		case "memory_limit":
@@ -241,6 +255,10 @@ func ParseServiceSpecFromBytes(data []byte) (*ServiceSpec, error) {
 			spec.CPUQuota = quota
 		case "restart":
 			spec.Restart = unquote(val)
+		case "max_restarts":
+			if n, err := strconv.Atoi(strings.TrimSpace(unquote(val))); err == nil {
+				spec.MaxRestarts = n
+			}
 		case "seccomp_profile":
 			spec.SeccompProfile = unquote(val)
 		case "capabilities_add", "capabilities.add":
@@ -250,6 +268,7 @@ func ParseServiceSpecFromBytes(data []byte) (*ServiceSpec, error) {
 		case "no_new_privs":
 			spec.NoNewPrivs = parseBool(val)
 		}
+
 	}
 
 	if err := scanner.Err(); err != nil {
