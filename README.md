@@ -8,7 +8,7 @@
 [![Security](https://img.shields.io/badge/Security-Seccomp_BPF_%2B_Caps-red?style=for-the-badge&logo=shield&logoColor=white)](#running-phase-3-verification)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](#)
 
-**Karim MicroVM OS** is a zero-dependency, minimal Linux distribution built from scratch for high-performance MicroVM workloads. It provides a static C PID 1 boot loader (`karim-init`), a compiled Go supervisor (`karim-svcd`) for process hierarchy management with cgroups v2 isolation, netlink networking (`karim-netd`), OverlayFS storage (`karim-stored`), Seccomp BPF & capability isolation (`karim-secd`), host-guest VSOCK control plane (`karim-vsockd` & `karim` CLI), eBPF CO-RE observability, reproducible image building, OCI layer engine, QMP state snapshot/restore orchestration, and hardware entropy / RTC clock sync / debug hardening (`internal/system`).
+**Karim MicroVM OS** is a zero-dependency, minimal Linux distribution built from scratch for high-performance MicroVM workloads. It adopts the **Option C (Hybrid Architecture)** model: combining a static C PID 1 boot loader (`karim-init`), a compiled Go supervisor (`karim-svcd`) with cgroups v2 & DAG resolution, netlink networking (`karim-netd`), OverlayFS storage (`karim-stored`), Seccomp BPF & capability isolation (`karim-secd`), host-guest VSOCK control plane (`karim-vsockd` & `karim` CLI), eBPF CO-RE observability, reproducible image building, OCI layer engine, QMP state snapshot/restore orchestration, hardware entropy / RTC clock sync / debug hardening (`internal/system`), and an integrated **BusyBox static userland toolbox (`/bin/busybox`)** with standard diagnostic applet symlinks (`sh`, `ls`, `cat`, `grep`, `ps`, `top`, `ip`, `find`, `vi`).
 
 ---
 
@@ -46,6 +46,14 @@
        │ - Resolves service DAG startup graph                     │
        │ - Manages cgroup v2 leaves (/sys/fs/cgroup/karim/<svc>)  │
        │ - Captures process stdout/stderr logs                    │
+       └────────────────────────────┬─────────────────────────────┘
+                                    │ Operates alongside
+       ┌────────────────────────────▼─────────────────────────────┐
+       │ Userland Diagnostic Toolbox (/bin/busybox)               │
+       │ - Static binary embedded in initramfs & rootfs           │
+       │ - 24 Applets: sh, ls, cat, cp, mv, rm, mkdir, rmdir,     │
+       │   grep, sed, awk, find, ps, top, ip, ping, vi, tar, etc. │
+       │ - Enables interactive emergency shell & debug profiling  │
        └──────────────────────────────────────────────────────────┘
 ```
 
@@ -65,6 +73,7 @@
 | **Phase 7** | Build-Time Layer Engine (`internal/pkgd`) | **COMPLETED** | OCI tarball parser, whiteout engine, `karim import`, `make test-phase7` |
 | **Phase 8** | QMP Snapshot & Restore Orchestration (`internal/qmp` & `internal/snapshot`) | **COMPLETED** | QEMU QMP memory state save/restore, guest VFS quiesce via `syscall.Sync`, `karim snapshot`, `make test-phase8` |
 | **Phase 9** | Entropy, RTC Sync & Debug Hardening (`internal/system`) | **COMPLETED** | `virtio-rng` seed, RTC `/dev/rtc0` sync, `/proc/cmdline` debug shell, `karim system`, `make test-phase9` |
+| **Option C** | Hybrid Architecture & BusyBox Toolbox (`/bin/busybox`) | **COMPLETED** | Static BusyBox download & Kbuild, 24 diagnostic applet symlinks, `busybox_demo.toml`, `make busybox` |
 
 
 ---
@@ -105,6 +114,9 @@ make ebpf
 
 # Build static Go eBPF observability daemon binary (Phase 5)
 make obsd
+
+# Download and compile static BusyBox diagnostic binary (Option C)
+make busybox
 
 # Pack initramfs CPIO archive
 make initramfs
@@ -287,6 +299,7 @@ karim-microvm-os/
 │   └── vsockd/                  # Host-Guest VSOCK RPC server & transport abstraction
 ├── config/
 │   └── services/                # TOML service configuration files
+│       ├── busybox_demo.toml
 │       └── karim-obsd.toml
 └── testing/
     ├── manual_test_phase0.sh    # Automated Phase 0 test harness
