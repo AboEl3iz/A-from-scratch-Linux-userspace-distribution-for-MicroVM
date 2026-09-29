@@ -1,0 +1,7 @@
+name = "busybox_demo"
+exec = "/bin/sh"
+args = ["-c", "while true; do echo '[busybox_demo] Heartbeat uptime:'; ps aux | grep busybox; sleep 5; done"]
+restart = "always"
+memory_limit = "32MB"
+cpu_quota = "20%"
+seccomp_profile = "app-default"
