@@ -29,10 +29,13 @@ OBSD_BIN := $(BUILD_DIR)/karim-obsd
 CLI_BIN  := $(DIST_DIR)/karim
 INITRD_CPIO := $(DIST_DIR)/initramfs.cpio
 ROOTFS_IMG  := $(DIST_DIR)/rootfs.sqsh
+BUSYBOX_VER := 1.36.1
+BUSYBOX_BIN := $(BUILD_DIR)/busybox
+BUSYBOX_WORK_DIR := /tmp/karim-busybox-$(BUSYBOX_VER)
 
-.PHONY: all check-tools kernel init svcd secd vsockd obsd ebpf initramfs rootfs build-hermetic verify-reproducible build-image run run-debug run-cli test test-phase0 test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-phase7 test-phase8 test-phase9 clean distclean help
+.PHONY: all check-tools kernel init busybox svcd secd vsockd obsd ebpf initramfs rootfs build-hermetic verify-reproducible build-image run run-debug run-cli test test-phase0 test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-phase7 test-phase8 test-phase9 clean distclean help
 
-all: check-tools init svcd secd vsockd obsd ebpf initramfs rootfs cli ## Build complete Karim MicroVM artifacts
+all: check-tools init svcd secd vsockd obsd ebpf busybox initramfs rootfs cli ## Build complete Karim MicroVM artifacts
 
 # ------------------------------------------------------------------------------
 # 1. Tooling Verification
@@ -112,6 +115,29 @@ init: "$(INIT_BIN)" ## Build static C init and workload binaries
 		strip "$(KV_STORE_BIN)"; \
 	fi
 
+$(BUSYBOX_BIN):
+	@mkdir -p "$(BUILD_DIR)"
+	@echo "==> Downloading static BusyBox source tarball..."
+	@wget -c https://busybox.net/downloads/busybox-$(BUSYBOX_VER).tar.bz2 -O "$(BUILD_DIR)/busybox.tar.bz2"
+	@echo "==> Extracting BusyBox source to space-free directory $(BUSYBOX_WORK_DIR)..."
+	@rm -rf "$(BUSYBOX_WORK_DIR)"
+	@mkdir -p "$(BUSYBOX_WORK_DIR)"
+	@tar -xf "$(BUILD_DIR)/busybox.tar.bz2" -C "$(BUSYBOX_WORK_DIR)" --strip-components=1
+	@if [ -f config/busybox_defconfig ]; then \
+		cp config/busybox_defconfig "$(BUSYBOX_WORK_DIR)/.config"; \
+	else \
+		$(MAKE) -C "$(BUSYBOX_WORK_DIR)" defconfig; \
+	fi
+	@sed -i 's/CONFIG_TC=y/CONFIG_TC=n/' "$(BUSYBOX_WORK_DIR)/.config"
+	@echo "==> Compiling static BusyBox binary..."
+	@$(MAKE) -C "$(BUSYBOX_WORK_DIR)" -j$$(nproc) LDFLAGS="-static" busybox
+	@cp "$(BUSYBOX_WORK_DIR)/busybox" "$@"
+	@strip "$@"
+	@echo "==> Static BusyBox binary size: $$(du -h "$@" | cut -f1)"
+
+busybox: $(BUSYBOX_BIN) ## Download and compile static BusyBox diagnostic binary
+
+
 
 # ------------------------------------------------------------------------------
 # 4. Go Supervisor & Daemons (`karim-svcd`, `karim-cli`)
@@ -167,19 +193,19 @@ ebpf: ## Generate Go bindings from C eBPF source via bpf2go
 # ------------------------------------------------------------------------------
 # 6. Initramfs Assembly (CPIO)
 # ------------------------------------------------------------------------------
-initramfs: cli init svcd secd vsockd obsd ## Pack hermetic reproducible initramfs.cpio via karim host CLI
+initramfs: cli init svcd secd vsockd obsd busybox ## Pack hermetic reproducible initramfs.cpio via karim host CLI
 	@echo "==> Building hermetic initramfs and rootfs images via karim host CLI..."
 	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)"
 
-rootfs: cli init svcd secd vsockd obsd ## Pack hermetic reproducible rootfs.sqsh with OCI package layers via karim host CLI
+rootfs: cli init svcd secd vsockd obsd busybox ## Pack hermetic reproducible rootfs.sqsh with OCI package layers via karim host CLI
 	@echo "==> Building hermetic initramfs and rootfs images via karim host CLI..."
 	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)"
 
-build-hermetic: cli init svcd secd vsockd obsd ## Compile hermetic initramfs and rootfs images via karim build
+build-hermetic: cli init svcd secd vsockd obsd busybox ## Compile hermetic initramfs and rootfs images via karim build
 	@echo "==> Building hermetic reproducible images via karim host CLI..."
 	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)"
 
-verify-reproducible: cli init svcd secd vsockd obsd ## Perform double-run byte-for-byte reproducibility audit
+verify-reproducible: cli init svcd secd vsockd obsd busybox ## Perform double-run byte-for-byte reproducibility audit
 	@echo "==> Running hermetic reproducibility audit..."
 	@"$(DIST_DIR)/karim" build --out-dir="$(DIST_DIR)" --init-bin="$(INIT_BIN)" --svcd-bin="$(SVCD_BIN)" --verify-reproducible
 
@@ -290,7 +316,7 @@ devsecops-check: test verify-reproducible ## Run complete local DevSecOps qualit
 # ------------------------------------------------------------------------------
 clean: ## Clean build intermediate files
 	@echo "==> Cleaning build artifacts..."
-	@rm -rf $(BUILD_DIR)/init $(BUILD_DIR)/karim-svcd $(BUILD_DIR)/karim-secd $(BUILD_DIR)/karim-vsockd $(BUILD_DIR)/karim-obsd $(BUILD_DIR)/initramfs_root $(BUILD_DIR)/rootfs_tree
+	@rm -rf $(BUILD_DIR)/init $(BUILD_DIR)/karim-svcd $(BUILD_DIR)/karim-secd $(BUILD_DIR)/karim-vsockd $(BUILD_DIR)/karim-obsd $(BUILD_DIR)/busybox $(BUILD_DIR)/initramfs_root $(BUILD_DIR)/rootfs_tree
 
 distclean: clean ## Full clean including kernel download and dist binaries
 	@echo "==> Wiping all build and dist outputs..."
