@@ -57,7 +57,7 @@ sequenceDiagram
 
 Failures report what was and was not undone as warnings, for example `guest not quiesced (…); the snapshot is crash-consistent only`. One warning is misleading: the thaw compensation always says `snapshot saved, but guest thaw failed: …`, even when the save itself failed. This is a known defect in the message. A save with an unwritable destination fails at `migrate` with QEMU's error (`Unable to open …: Is a directory`), resumes the VM, thaws the guest and writes no metadata.
 
-#<Callout type="note" title="What quiesce freezes in the default layout">
+<Callout type="note" title="What quiesce freezes in the default layout">
 `FIFREEZE` applies only to writable, block-backed filesystems. squashfs, tmpfs and overlay are skipped, and so is anything that answers `EOPNOTSUPP`, `ENOTTY` or `EINVAL`. The default MicroVM has no writable block device (see [Runtime Storage](/subsystems/runtime-storage)), so quiesce is effectively `sync()` and the report says so.
 </Callout>
 
