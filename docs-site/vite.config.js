@@ -7,7 +7,7 @@ import rehypeCodeMeta from './plugins/rehype-code-meta.js'
 
 // DOCS_BASE is set by the GitHub Pages workflow to "/<repository>/".
 export default defineConfig({
-  base: process.env.DOCS_BASE || '/',
+  base: process.env.DOCS_BASE || '/A-from-scratch-Linux-userspace-distribution-for-MicroVM/',
   plugins: [
     {
       enforce: 'pre',

@@ -51,9 +51,7 @@ jobs:
 
       - name: Build
         env:
-          # Project pages are served from /<repository>/; user/org pages and
-          # custom domains from "/". configure-pages reports the right base.
-          DOCS_BASE: ${{ steps.pages.outputs.base_path }}/
+          DOCS_BASE: /${{ github.event.repository.name }}/
         run: npm run build
 
       - name: Upload Pages artifact
