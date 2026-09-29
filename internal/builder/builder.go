@@ -98,6 +98,7 @@ func BuildImagePipeline(cfg BuildConfig) (*BuildManifest, error) {
 
 	// 3. Stage RootFS Directory Structure
 	dirsToCreateRoot := []string{
+		"bin",
 		"sbin",
 		"etc/karim/services",
 		"run/karim",
@@ -125,6 +126,27 @@ func BuildImagePipeline(cfg BuildConfig) (*BuildManifest, error) {
 		if _, err := os.Stat(srcBin); err == nil {
 			_ = copyFileExecutable(srcBin, filepath.Join(initramfsStaging, "bin", binName))
 			_ = copyFileExecutable(srcBin, filepath.Join(rootfsStaging, "bin", binName))
+		}
+	}
+
+	// Stage BusyBox binary and applet symlinks into initramfs and rootfs
+	busyboxSrc := filepath.Join(buildDir, "busybox")
+	if _, err := os.Stat(busyboxSrc); err == nil {
+		for _, staging := range []string{initramfsStaging, rootfsStaging} {
+			busyboxDest := filepath.Join(staging, "bin", "busybox")
+			_ = copyFileExecutable(busyboxSrc, busyboxDest)
+
+			// Create standard applet symlinks pointing to /bin/busybox
+			applets := []string{
+				"sh", "ls", "cat", "cp", "mv", "rm", "mkdir", "rmdir",
+				"grep", "sed", "awk", "find", "ps", "top", "ip", "ping",
+				"vi", "tar", "gzip", "head", "tail", "wc", "chmod", "chown",
+			}
+			for _, applet := range applets {
+				linkPath := filepath.Join(staging, "bin", applet)
+				_ = os.Remove(linkPath) // Remove existing file or symlink
+				_ = os.Symlink("/bin/busybox", linkPath)
+			}
 		}
 	}
 
