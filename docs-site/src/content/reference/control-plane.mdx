@@ -1,0 +1,76 @@
+# Control-Plane API
+
+The guest supervisor serves a framed JSON RPC protocol on AF_VSOCK port 1024 and on `/run/karim/vsock.sock` (mode `0600`). `karim-vsockd` serves the same protocol on development hosts, with freeze and shutdown disabled.
+
+<FrameDiagram />
+
+## Messages
+
+```json title="request"
+{ "id": "req-1", "command": "stop_service", "service": "kv_store", "args": [], "payload": "" }
+```
+
+```json title="response"
+{ "id": "req-1", "success": true, "data": "service kv_store stopped successfully" }
+```
+
+A connection carries any number of request/response pairs, except `trace`, which turns the connection into a stream: an initial `{"success":true,"data":"STREAM_START"}` followed by one JSON `ExecEvent` per frame.
+
+## Commands
+
+| Command (aliases) | Privileged | Fields | Data |
+|---|---|---|---|
+| `ping` | | | `"PONG"` |
+| `list_services` (`ps`) | | | array of `ServiceInfo` |
+| `start_service` (`start`) | ✓ | `service` | message |
+| `stop_service` (`stop`) | ✓ | `service` | message, after the process exited |
+| `get_logs` (`logs`) | | `service` | retained output (string) |
+| `get_metrics` (`metrics`) | | | `SystemMetrics` |
+| `get_obsd` (`obsd`) | | | probe states, histograms, Prometheus text |
+| `trace` (`stream_exec`, `execsnoop`) | | | stream of `ExecEvent` |
+| `get_system_status` (`system`, `status`) | | | `SystemStatus` |
+| `load_service` (`apply_service`) | ✓ | `payload` = TOML | message |
+| `run_service` | ✓ | `service`, `payload` = TOML | message |
+| `quiesce` (`freeze`) | ✓ | | report of frozen filesystems |
+| `unquiesce` (`thaw`) | ✓ | | report of thawed filesystems |
+| `resync_clock` | ✓ | | time set from the RTC |
+| `reseed_rng` | ✓ | `payload` = hex, 32–512 bytes | message |
+| `shutdown` | ✓ | `args[0]` = `poweroff` \| `reboot` \| `halt` | message; shutdown follows |
+
+## Authorization
+
+A request is privileged if its command appears with ✓ above. Privileged requests are accepted from:
+
+- AF_VSOCK peers whose CID is **2** (the hypervisor host);
+- Unix-socket peers whose `SO_PEERCRED` UID is **0** or equals the daemon's effective UID.
+
+Everyone else, including guest processes on VSOCK loopback (CID 1), receives `permission denied`. Identity always comes from the kernel, never from the request.
+
+## Limits
+
+| Limit | Value |
+|---|---|
+| Frame size | 10 MiB |
+| Concurrent connections | 64 (excess: `server busy`) |
+| Idle timeout | 5 minutes |
+| Response write timeout | 30 seconds |
+
+## Types
+
+```go title="internal/vsockd/protocol.go"
+type ServiceInfo struct {
+	Name           string   `json:"name"`
+	State          string   `json:"state"`
+	PID            int      `json:"pid"`
+	Exec           string   `json:"exec"`
+	MemoryLimit    int64    `json:"memory_limit"`
+	CPUQuota       float64  `json:"cpu_quota"`
+	Restart        string   `json:"restart"`
+	SeccompProfile string   `json:"seccomp_profile"`
+	After          []string `json:"after"`
+	User           string   `json:"user,omitempty"`
+	Restarts       int      `json:"restarts"`
+	LastExit       string   `json:"last_exit,omitempty"`
+	Reason         string   `json:"reason,omitempty"`
+}
+```

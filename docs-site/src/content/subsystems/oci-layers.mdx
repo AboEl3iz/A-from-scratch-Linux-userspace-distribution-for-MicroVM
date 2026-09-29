@@ -1,0 +1,99 @@
+# OCI Layer Extraction
+
+`karim import` registers OCI / Docker image archives, and `karim build` merges their layers into the SquashFS root filesystem. Image archives are **attacker-controlled input processed on the build host**, so the extractor (`internal/pkgd`) is built around one invariant:
+
+> Every filesystem mutation stays inside the staging root, and the kernel — not string handling — enforces it.
+
+This holds for **tar layers** (`oci-archive`, `tarball`), which are the untrusted input. Three paths around them do not meet it yet; see [Open items](#open-items).
+
+<Callout type="note">
+Extraction lives in `internal/pkgd` (`extract.go`, `oci.go`, `merger.go`). `internal/stored` is the separate runtime storage subsystem that mounts the SquashFS image inside the guest.
+</Callout>
+
+## Two layers of confinement
+
+### 1. Lexical validation
+
+`normalizeEntryName` strips leading `./` and `/` (absolute names are relative to the image root, as in Docker), rejects NUL bytes, names over 4096 bytes and more than 256 components, and rejects anything that is not local after cleaning (`filepath.IsLocal`): `../x`, `a/../../x`. Whiteout targets and hardlink targets go through the same check.
+
+### 2. Kernel-backed confinement with `os.Root`
+
+All operations go through an `*os.Root` opened on the staging directory (Go ≥ 1.24; the mutation API — `Link`, `Symlink`, `RemoveAll`, `MkdirAll` — arrived in 1.25). `os.Root` resolves paths with `openat`-style walks and **refuses** any path that escapes the root, including through symlinks swapped in between check and use.
+
+`os.Root` has *beneath* semantics: an absolute symlink inside the image (for example `lib -> /usr/lib`) would be rejected rather than followed. Container images need *in-root* semantics, so parents are first resolved by `resolveInRoot`, which mirrors `openat2(RESOLVE_IN_ROOT)`:
+
+```go title="internal/pkgd/extract.go"
+// Absolute targets restart at the image root, ".." never climbs above it,
+// at most 40 symlink hops. The result contains no symlinks; os.Root then
+// independently refuses to leave the root even if the tree changed.
+func resolveInRoot(root *os.Root, dir string) (string, error)
+```
+
+## Per-entry policy
+
+| Entry | Handling |
+|---|---|
+| Regular file | remove whatever is there, create with `O_CREAT \| O_EXCL` (the final component is never followed; no truncation through a hardlink or symlink) |
+| Directory | keep an existing directory; replace a non-directory |
+| Symlink | store the target text verbatim; it is only ever resolved in-root |
+| Hardlink | source resolved in-root, must be an already-extracted regular file; `root.Link`; failure is fatal (no silent symlink fallback) |
+| `.wh.<name>` | parent resolved in-root, `root.RemoveAll`; skipped if this layer created the path |
+| `.wh..wh..opq` | removes lower-layer children of the directory, keeps entries this layer created |
+| Char / block device, FIFO | **never created on the host**; recorded as metadata |
+
+OCI whiteouts apply to *lower* layers only. The extractor tracks the paths created by the current layer (and their ancestors), so an opaque marker that appears after same-layer files does not delete them.
+
+## Metadata without privileges
+
+Ownership, setuid/setgid/sticky bits and special files are not materialized on the build host — creating setuid files or device nodes there is both a privilege requirement and a risk. The extractor records them in a `MetadataTable`, which the builder writes as a mksquashfs pseudo file:
+
+```text title="rootfs.pseudo (generated, sorted)"
+"dev/console" c 600 0 0 5 1
+"home/app/data" m 600 1000 1000
+"run/fifo" i 644 0 0 f
+"tmp" m 1777 0 0
+"usr/bin/su" m 4755 0 0
+```
+
+```bash
+SOURCE_DATE_EPOCH=0 mksquashfs rootfs_tree rootfs.sqsh -noappend -comp xz -all-root \
+  -no-recovery -no-exports -no-fragments -pseudo-override -pf rootfs.pseudo
+```
+
+`-all-root` keeps root as the default owner; `-pseudo-override` lets the recorded UIDs/GIDs win. The output is byte-for-byte reproducible. The builder test unpacks the image with `unsquashfs -lln` and checks for `-rwsr-xr-x 0/0` on `usr/bin/su`, `drwxrwxrwt 0/0` on `tmp`, `1000/1000` on `home/app/data` and `crw-------` on `dev/console`.
+
+## Integrity
+
+Digests are verified **before** anything is written:
+
+- a layer stored as `blobs/sha256/<hex>` must hash to `<hex>`;
+- when the image config has `rootfs.diff_ids` and their number matches the layer count, each *uncompressed* layer must match (a count mismatch skips this check silently);
+- `karim import` pins the whole archive in `config/layers.toml` (`sha256 = "…"`), and the build refuses a modified or substituted archive.
+
+Layers without any digest are reported as unverified (`WARNING: layer … has no digest to verify against`).
+
+## Resource limits
+
+| Limit | Default |
+|---|---|
+| Entries per layer | 1,048,576 |
+| Bytes per file | 4 GiB |
+| Bytes per layer | 16 GiB |
+| Decompression ratio | 200 : 1 after 64 MiB of output |
+
+Layers are streamed: `archive/tar` seeks over preceding members of the (uncompressed) outer archive, so no layer is buffered in memory. Gzip-compressed outer archives are decompressed to a temporary file under the same limits.
+
+## Verification
+
+- A malicious-archive corpus: `..` writes, deep `..`, absolute names, symlink-then-write (relative and absolute), a symlink planted by a lower layer, hardlinks to outside files, hardlink-through-symlink-then-truncate, whiteout and opaque escapes (direct and through symlinks), symlink loops. Each case asserts that a fingerprint of everything outside the root is unchanged.
+- Native Go fuzzing with the same invariant: 186,128 executions in 60 s, 74 new coverage inputs, no escapes. (Use `-fuzzminimizetime 5s`: minimizing a filesystem-touching target for the default 60 s looks like a hang.)
+
+## Open items
+
+<Callout type="open" title="Paths outside the os.Root guarantee">
+- **`target_dir`** is validated lexically, but it is then joined to the staging root and passed to `os.MkdirAll` and `os.OpenRoot` with ordinary path resolution. A symlink planted by an *earlier* layer (for example `opt -> /`) would make a later layer with `target_dir = "opt"` open a host directory as its root. It should be resolved with `resolveInRoot` first.
+- **`directory` and `binary` layers** are copied with `filepath.Walk`, `os.MkdirAll` and `os.OpenFile(O_CREATE|O_TRUNC)`, all of which follow symlinks left by earlier layers.
+- **The builder** writes default `etc/passwd` and `etc/group` into the staging tree after the merge with plain `os.WriteFile`. A dangling absolute symlink from an image at that path redirects the write to the host.
+- The pinned archive is hashed and then reopened for extraction, which leaves a small window for the file to be swapped between the two opens.
+- Extraction runs as the invoking user but not inside a user namespace, which the plan lists as optional hardening.
+</Callout>

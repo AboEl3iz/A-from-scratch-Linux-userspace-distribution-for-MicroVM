@@ -1,0 +1,93 @@
+# VSOCK Transport
+
+The host controls the guest through AF_VSOCK — a socket family whose endpoints are identified by a context ID (CID) and a port instead of IP addresses. Go's `net` package has no AF_VSOCK support, so Karim implements `net.Conn` and `net.Listener` itself in `internal/vsockd/transport.go`. This page explains how that implementation integrates with the Go runtime poller and why the details matter.
+
+## Addresses
+
+| Endpoint | CID | Port |
+|---|---|---|
+| Host (hypervisor) | 2 (`VMADDR_CID_HOST`) | ephemeral |
+| Guest control plane | 3 by default (`guest-cid=3` in QEMU) | 1024 |
+| Guest-local loopback | 1 (`VMADDR_CID_LOCAL`) | — |
+
+The CLI accepts `vsock://CID:PORT`, `unix:///path` and `tcp://host:port`. A bare path (starting with `/` or `.`) is treated as a Unix socket and a bare `host:port` as TCP. The default `--target` is `vsock://3:1024`.
+
+## Netpoller integration
+
+Every descriptor is created **non-blocking and close-on-exec atomically** and wrapped in an `*os.File`. `os.NewFile` detects `O_NONBLOCK` and registers the descriptor with the runtime netpoller (epoll on Linux). That single decision gives the connection standard-library semantics:
+
+| Property | How it is obtained |
+|---|---|
+| End of stream is `io.EOF` | `os.File.Read` turns a zero-byte `read(2)` into `io.EOF` |
+| No short writes without an error | `os.File.Write` loops until done; `Write` also asserts `n == len(b)` |
+| Deadlines work | `SetDeadline` is enforced by the poller |
+| `Close` unblocks readers and `Accept` | pending waits return `net.ErrClosed` |
+| No thread pinning | a blocked goroutine parks instead of occupying an OS thread |
+| No descriptor leaks into services | `SOCK_CLOEXEC` / `accept4(SOCK_CLOEXEC)` |
+
+```go title="internal/vsockd/transport.go (simplified: the EINTR retry loop is omitted)" {4-5,8}
+func (l *VSockListener) Accept() (net.Conn, error) {
+	rc, _ := l.f.SyscallConn()
+	err = rc.Read(func(fd uintptr) bool {
+		nfd, sa, acceptErr = unix.Accept4(int(fd), unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC)
+		return acceptErr != unix.EAGAIN // false: park on the poller until readable
+	})
+	// ...
+	return newVSockConn(nfd, l.addr, raddr), nil
+}
+```
+
+### Non-blocking connect
+
+`connect(2)` on a non-blocking socket returns `EINPROGRESS`. The dialer parks on write readiness through `RawConn.Write` — skipping the first, pre-wait invocation — and then reads the outcome from `SO_ERROR`. An optional dial timeout is implemented with a write deadline.
+
+### Error normalization
+
+`os.File` reports `os.ErrClosed` after `Close`, but raw `SyscallConn` operations surface the poller's internal `use of closed file`. `mapFileErr` normalizes both to `net.ErrClosed` and converts `*os.PathError` values into `*net.OpError`, passing `io.EOF` and other errors through unchanged, so `errors.Is(err, os.ErrDeadlineExceeded)` and `net.Error.Timeout()` work for callers. The loopback test caught the unnormalized case during verification.
+
+## Framing
+
+<FrameDiagram />
+
+```go title="internal/vsockd/protocol.go"
+func ReadFrame(reader io.Reader) ([]byte, error) {
+	header := make([]byte, 4)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return nil, err
+	}
+	length := binary.BigEndian.Uint32(header)
+	if length > MaxFrameSize {
+		return nil, fmt.Errorf("frame size %d exceeds maximum allowed limit (%d bytes)", length, MaxFrameSize)
+	}
+	var buf bytes.Buffer
+	buf.Grow(int(min(length, initialFrameBuffer))) // 64 KiB, not 10 MiB
+	if _, err := io.CopyN(&buf, reader, int64(length)); err != nil {
+		// a truncated payload is io.ErrUnexpectedEOF, never success
+	}
+	return buf.Bytes(), nil
+}
+```
+
+The length header is untrusted: the buffer grows only as bytes arrive, so a peer that announces 10 MiB and stalls cannot pin 10 MiB per connection.
+
+## Server hygiene
+
+| Limit | Default | Purpose |
+|---|---|---|
+| Concurrent connections | 64 | excess connections receive a `server busy` frame and are closed, without stalling `Accept` |
+| Idle timeout | 5 min | a silent peer is disconnected |
+| Write timeout | 30 s | a slow reader cannot block a handler forever |
+| Transient `Accept` errors | backoff 5 ms → 1 s | EMFILE and friends do not take the control plane down |
+| Panics in providers | recovered | become `internal error` responses instead of killing the supervisor |
+
+The Unix socket is created with mode `0600` and a listen backlog of 128. Peers are identified by the kernel, not by anything they send: VSOCK CID 2 (the host) is trusted, and so is a Unix peer whose `SO_PEERCRED` uid is 0 or equal to the server's euid. The privileged command list is on the [Security](/subsystems/security#control-plane-authorization) page.
+
+In the guest, the control plane is served by `karim-svcd`, which enables the freezer, clock resync, RNG reseed and shutdown commands. The standalone `karim-vsockd` binary leaves those four disabled.
+
+`Server.Close` closes every listener **and** every tracked connection. For `trace` streams, a reader goroutine detects the client hanging up and tears down the upstream `karim-obsd` connection.
+
+## Verification
+
+- Unit tests over an `AF_UNIX` socketpair (same netpoller path): EOF after peer close, deadlines, close-unblocks-read, an 8 MiB frame round trip, truncated frames, short writes.
+- A real AF_VSOCK loopback test (when `vsock_loopback` is available): `accept4`, non-blocking connect, EOF, peer identified as an untrusted VSOCK peer, `Close` unblocking `Accept`.
+- In the MicroVM: 100 consecutive host connections left the guest at 24 goroutines before and after, and QEMU idle (≈ 0.5 % CPU). See [PM-003](/postmortems/pm-003-vsock-spin) for the bug this replaced.

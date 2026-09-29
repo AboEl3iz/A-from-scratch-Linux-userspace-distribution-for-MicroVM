@@ -1,0 +1,60 @@
+# PM-004: OCI extraction escapes the root
+
+| | |
+|---|---|
+| **Severity** | Critical (build-host compromise) |
+| **Component** | `internal/pkgd` |
+| **Detected** | 2026-09-29, code audit; reproduced with a crafted tar |
+| **Status** | Resolved |
+
+## Summary
+
+Layer extraction joined tar entry names onto the staging directory with `filepath.Join(dest, filepath.Clean(name))`. `Clean` keeps leading `..`, so crafted entries could write files outside the root. Whiteouts could delete files outside it, and hardlinks could alias host files into the image.
+
+## Impact
+
+Importing a malicious image with `karim import`, followed by `karim build`, could:
+
+- write arbitrary files on the build host (reproduced: `../escaped.txt`);
+- delete arbitrary host files through `../victim/.wh.precious` (reproduced);
+- clear host directories through opaque whiteouts;
+- plant a symlink such as `x -> /`, then write through it;
+- copy host files into the image via hardlinks, and overwrite them through a later truncating write.
+
+If the build runs with elevated privileges (for example under `sudo`), every one of these reaches the whole host.
+
+## Root cause
+
+Untrusted paths were treated as trusted, with confinement attempted by string handling. Even correct string checks cannot stop symlink traversal: the check and the use happen at different times.
+
+## Contributing factors
+
+- All layers were buffered in memory, and there were no size, entry or decompression limits.
+- Layer digests were never verified; the `sha256` field in `layers.toml` was unused.
+- Modes and ownership were normalized away, so setuid binaries and `/tmp` permissions were lost.
+
+## Resolution
+
+- Lexical validation (`filepath.IsLocal`) as a first gate.
+- All tar-layer operations through `os.Root`, which refuses escapes at the kernel level, plus in-root symlink resolution for container semantics.
+- Explicit per-entry policies: `O_EXCL` creation, confined hardlinks, and whiteouts that affect lower layers only.
+- Special files and ownership carried as mksquashfs pseudo definitions instead of being created on the host.
+- Digest verification before extraction, archive pinning by `karim import`, streaming reads, and resource limits.
+
+See [OCI Layer Extraction](/subsystems/oci-layers).
+
+## Verification
+
+- A malicious-archive corpus of 13 cases, each asserting that nothing outside the root changes.
+- Native fuzzing: 186,128 executions without an escape.
+- An end-to-end image test confirms setuid, sticky, ownership and device nodes reach the image.
+
+## Lessons
+
+- Confinement belongs to the kernel (`openat2` / `os.Root`), not to path strings.
+- Treat container images like any other untrusted network input.
+
+## Follow-ups
+
+- Run extraction inside a user namespace.
+- Extend the `os.Root` guarantee to the paths it does not yet cover: `target_dir`, which is resolved with host semantics; `directory` and `binary` layers; and the builder's default `etc/passwd` and `etc/group` writes. Details are under [Open items](/subsystems/oci-layers#open-items).

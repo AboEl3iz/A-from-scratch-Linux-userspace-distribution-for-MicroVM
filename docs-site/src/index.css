@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html { scroll-padding-top: 5rem; }
+  ::selection { background: rgb(14 165 233 / 0.3); }
+  /* Show operators as typed: no != -> ≠ ligatures in code. */
+  code, pre, kbd { font-variant-ligatures: none; }
+}
+
+@layer components {
+  .prose :where(code):not(:where(pre code)) {
+    @apply rounded-md border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[0.85em] font-medium dark:border-slate-800 dark:bg-slate-900;
+  }
+  .prose table { @apply text-sm; }
+  .prose h2, .prose h3 { @apply scroll-mt-20; }
+  .heading-anchor { @apply ml-2 text-slate-400 no-underline opacity-0 transition-opacity group-hover:opacity-100 dark:text-slate-600; }
+}

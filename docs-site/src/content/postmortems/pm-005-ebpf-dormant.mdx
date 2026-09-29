@@ -1,0 +1,52 @@
+# PM-005: The probes that never ran
+
+| | |
+|---|---|
+| **Severity** | High (false telemetry) |
+| **Component** | `internal/obsd`, `ebpf/` |
+| **Detected** | 2026-09-29, code audit |
+| **Status** | Resolved |
+
+## Summary
+
+`karim-obsd` loaded its eBPF programs but never attached them to tracepoints, so they never executed. Map lookup failures, and every load failure, were answered with simulated histograms under the same schema, while the CLI reported "ACTIVE (Kernel CO-RE BTF probes loaded)". The exec probe also read its filename from the wrong place, and "CO-RE" relied on a hand-written 77-line `vmlinux.h`.
+
+## Impact
+
+- Operators saw plausible but fabricated latency distributions.
+- `karim trace` could never show a real exec event; if attached, every filename would have been the tracepoint header bytes.
+- Hard-coded struct layouts would have silently misread fields on any kernel whose layout differed.
+- The Prometheus `le` bounds were off by one bucket and `_sum` was invented.
+- Concurrent trace sessions split events between themselves, and simulated streams leaked a goroutine per disconnected client.
+
+## Root cause
+
+- Loading was confused with attaching: no `link.Tracepoint` or `link.AttachTracing` call existed.
+- `__data_loc` fields were misunderstood: the probe passed `ctx` itself as the string source instead of `ctx + (loc & 0xFFFF)`.
+- The stub `vmlinux.h` had no `preserve_access_index`, so no CO-RE relocations were emitted.
+- The error-handling policy equated "unavailable" with "use synthetic data".
+
+## Resolution
+
+- A probe lifecycle with explicit states and reasons; retained link handles; `tp_btf` preferred with a classic-tracepoint fallback and an optional external BTF file.
+- The exec probe reads `bprm->filename` through CO-RE (`tp_btf`) or decodes `__data_loc` (classic), with zeroed ring-buffer records and an explicit length.
+- `vmlinux.h` generated from the project kernel's BTF; bpf2go-generated Go types; clang 18 pinned; a CI drift check.
+- A kernel-side `sum_us`/`count`, correct bucket bounds, `probe_up` and `probe_errors_total` metrics.
+- Simulation only behind `-simulate`, labelled everywhere.
+- A single ring-buffer reader with fan-out, and context-aware streams.
+
+See [eBPF Engine](/subsystems/ebpf).
+
+## Verification
+
+- In the MicroVM: all three probes reported `attached (tp_btf)`, histograms held real data, and traces showed real filenames and parent PIDs.
+- Unit tests assert that production mode never exports simulated series.
+
+## Lessons
+
+- An observability system that can't tell its data is fake is worse than none. Degrade to a clear "unavailable", never to plausible numbers.
+- Tracepoint argument layouts are ABI details; read them through BTF.
+
+## Follow-ups
+
+- `obsd.toml` and `karim-obsd.toml` both start the daemon.

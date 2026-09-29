@@ -1,0 +1,132 @@
+# PID 1 & Lifecycle Contract
+
+When the init process of the initial PID namespace exits — for *any* reason: `os.Exit`, an unrecovered panic, a Go runtime fatal error — the kernel calls `panic("Attempted to kill init!")`. With `panic=0` on the command line the VM then hangs forever. Karim's lifecycle is built around one contract: **PID 1 never exits; the only legitimate end is `reboot(2)`.**
+
+## Two processes, two jobs
+
+| | `karim-init` (C) | `karim-svcd` (Go) |
+|---|---|---|
+| PID | 1, forever | child of init |
+| Scope | minimal and auditable | everything complex |
+| On crash | — (cannot crash into a panic) | init restarts it with backoff |
+| Reaping | orphans reparented to PID 1 | its own subtree (`PR_SET_CHILD_SUBREAPER`) |
+| Final step | kill remaining, sync, remount ro, `reboot(2)` | drain services, report action via exit code |
+
+Moving the supervisor out of PID 1 converts a Go fatal error — which `recover` cannot intercept, e.g. `concurrent map read and map write` — from a kernel panic into a supervised restart.
+
+## Init's event loop
+
+Init blocks the signals it cares about and consumes them **synchronously** with `sigtimedwait(2)`; no logic ever runs in an asynchronous signal handler (the previous handler called `printf`).
+
+```c title="init/init.c"
+sigemptyset(&init_sigset);
+sigaddset(&init_sigset, SIGCHLD);
+sigaddset(&init_sigset, SIGTERM);   /* poweroff */
+sigaddset(&init_sigset, SIGINT);    /* Ctrl-Alt-Del: reboot */
+sigaddset(&init_sigset, SIGUSR1);   /* halt */
+sigaddset(&init_sigset, SIGUSR2);   /* consumed and ignored */
+sigaddset(&init_sigset, SIGHUP);    /* consumed and ignored */
+sigprocmask(SIG_BLOCK, &init_sigset, NULL);
+/* (comments added here) children reset the mask before execve */
+```
+
+At boot init calls `reboot(RB_DISABLE_CAD)`, so Ctrl-Alt-Del arrives as `SIGINT` — a graceful request — instead of an immediate hard reset.
+
+### Exit-code contract
+
+The supervisor tells init *why* it exited:
+
+| Exit code | Meaning | Init does |
+|---|---|---|
+| 64 | poweroff completed | finalize, `reboot(RB_POWER_OFF)` |
+| 65 | reboot completed | finalize, `reboot(RB_AUTOBOOT)` |
+| 66 | halt completed | finalize, `reboot(RB_HALT_SYSTEM)` |
+| anything else, or a signal | crash | restart after backoff (1 s → 30 s, reset after 60 s stable), **unless** init was already signalled to shut down; then any exit finalizes with the requested action |
+
+If init itself was signalled to shut down and the supervisor does not finish within 90 s, init finalizes anyway. That deadline does not cover a shutdown the supervisor starts on its own (power button or RPC), because init only learns about that from the exit code. If the supervisor crashes in the middle of such a drain, init restarts it.
+
+## Crash recovery
+
+```mermaid
+sequenceDiagram
+  participant I as karim-init
+  participant S1 as karim-svcd (old)
+  participant C as service cgroups
+  participant S2 as karim-svcd (new)
+  S1->>S1: fatal error / SIGKILL
+  S1-->>I: SIGCHLD (killed by signal 9)
+  I->>I: log "Supervisor crashed (signal 9)#59; restarting in 1 s"
+  I->>S2: fork + execve after backoff
+  S2->>C: KillStaleServiceCGroups: cgroup.kill each leftover service
+  C-->>I: orphans exit, init reaps them
+  S2->>S2: Plan + StartPlanned: cold start of every service
+```
+
+Services orphaned by the crash are reparented to init; the new supervisor kills them through their cgroups and starts a clean generation. This was exercised end to end: a root service `SIGKILL`ed the supervisor, init restarted it, and the stale `httpd`, `kv_store` and `karim-obsd` processes were terminated and cold-started.
+
+## Graceful shutdown
+
+Three triggers converge on one drain path in the supervisor:
+
+- the **ACPI power button** — QMP `system_powerdown`, read from the evdev node whose name is "Power Button" (`EV_KEY` / `KEY_POWER`, value 1);
+- the privileged **`shutdown` RPC**, accepted only from trusted peers (host CID 2, or a local root/same-uid Unix peer) (`karim shutdown [poweroff|reboot|halt]`);
+- **signals forwarded by init**: init passes SIGTERM, SIGINT and SIGUSR1 on to the supervisor unchanged.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant H as Host (QMP / CLI)
+  participant S as karim-svcd
+  participant A as Service actors
+  participant I as karim-init
+  participant K as Kernel
+  H->>S: power button / shutdown RPC
+  S->>S: close control-plane listeners
+  S->>A: StopAll in reverse dependency order (60 s deadline)
+  A-->>S: each stopped: SIGTERM, then cgroup SIGKILL after stop_timeout
+  S->>S: kill(-1, SIGTERM), wait up to 3 s, kill(-1, SIGKILL) only if needed, reap
+  S->>S: sync()
+  S-->>I: exit(64)
+  I->>I: kill(-1, SIGTERM) → SIGKILL, bounded reap
+  I->>K: sync, remount block-backed filesystems read-only, sync
+  I->>K: reboot(RB_POWER_OFF)
+```
+
+Actual console output from the end-to-end run:
+
+```text
+[karim-svcd] Shutdown requested: poweroff
+[karim-svcd] Shutdown sequence (poweroff): stopping services in reverse dependency order...
+[karim-svcd] Stopping service kv_store (PID 254) with SIGTERM...
+[karim-svcd] Service kv_store stopped (killed by signal 15 (terminated))
+[karim-svcd] Stopping service httpd (PID 245) with SIGTERM...
+[karim-svcd] Services stopped; handing poweroff to init.
+[karim-init] Final shutdown (poweroff): terminating remaining processes...
+[karim-init] System poweroff.
+[   37.863379] reboot: Power down
+```
+
+`kv_store` (`after = ["httpd"]`) stops before `httpd` — reverse dependency order.
+
+<Callout type="design" title="The kill(-1) guard">
+`kill(-1, sig)` signals every process the caller may signal except PID 1 and itself. The supervisor only broadcasts it when it is PID 1 or init's direct child; run from a shell on a development host it skips the broadcast rather than signalling the whole machine.
+</Callout>
+
+## Other boot paths
+
+- **Debug shell.** With `karim.debug=1` or `karim.debug=shell` on the kernel command line, init runs `/bin/sh` on the console **before** it starts the supervisor, and waits for the shell to exit. Shutdown signals that arrive in the meantime are consumed and discarded.
+- **Missing supervisor.** If `/sbin/karim-svcd` does not exist, init falls back to a console shell and keeps reaping orphans. An `execve` failure exits the child with 127, which init treats as a crash.
+- **Supervisor as PID 1.** When `karim-svcd` is started as PID 1 (without karim-init), it remounts filesystems read-only and calls `reboot(2)` itself.
+
+The supervisor accepts `-config-dir` (default `/etc/karim/services`), `-enable-net`, `-enable-overlay`, `-enable-vsockd` and `-emergency-shell`, all enabled by default. The local control socket is `/run/karim/vsock.sock`, which `KARIM_UNIX_SOCKET` overrides.
+
+## Protecting the supervisor
+
+- `oom_score_adj = -1000` and a dedicated cgroup `karim-supervisor` with `memory.min = 32 MiB`.
+- A soft Go memory limit of 96 MiB unless `GOMEMLIMIT` is set.
+- Panic recovery around every control-plane handler (panics become error responses; runtime throws are covered by process separation).
+- The registry is filled before listeners open, and every map access is behind the registry's methods.
+
+<Callout type="open" title="Known gap">
+Only the supervisor watches the power button, so a press that arrives while init is restarting a crashed supervisor is lost. Signals to init still work during that window, but init then finalizes **immediately**: remaining processes are killed with `kill(-1)` and services are not drained in dependency order.
+</Callout>

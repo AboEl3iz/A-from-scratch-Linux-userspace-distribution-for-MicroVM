@@ -1,0 +1,61 @@
+# Getting Started
+
+Karim MicroVM OS is a minimal Linux distribution for QEMU/KVM MicroVMs. A build produces three artifacts — a kernel (`bzImage`), an initramfs that is the running root filesystem, and a read-only SquashFS image — plus a host CLI, `karim`, that controls the guest over AF_VSOCK and the hypervisor over QMP.
+
+## Prerequisites
+
+| Tool | Why |
+|---|---|
+| `gcc` with a static glibc | the PID 1 init and the sample workloads are static C binaries |
+| Go 1.26 (see `go.mod`) | supervisor, daemons and CLI; `os.Root` needs Go ≥ 1.25 |
+| `clang` 18, `libbpf-dev` | required by `make check-tools`. When clang is installed, `make ebpf` (a dependency of `obsd`, `cli` and `test`) always regenerates the objects, needs **exactly** clang 18, and fetches bpf2go v0.22.0 with `go install` (network access) |
+| `bpftool` | only for `make vmlinux-h` |
+| `pahole` (dwarves) | the kernel is built with `CONFIG_DEBUG_INFO_BTF=y` |
+| kernel build tools: `flex`, `bison`, `bc`, `libelf-dev`, `libssl-dev` | `make kernel` runs a full upstream kernel build |
+| `wget`, `xz`, `bzip2` | downloading and unpacking the kernel and BusyBox tarballs |
+| `qemu-system-x86`, `qemu-utils` | running the MicroVM, internal snapshots |
+| `squashfs-tools` | `rootfs.sqsh` (the initramfs CPIO is written natively in Go) |
+
+<Callout type="warning" title="Kernel builds need memory">
+The final BTF link step reads an ~800 MB intermediate image. With less than ~1 GB of free RAM, `objcopy` can silently emit an empty `.BTF` section and the link fails later with `FAILED: load BTF from vmlinux: No data available`. Re-run `make kernel` with more free memory.
+</Callout>
+
+## Build and boot
+
+```bash title="host shell"
+make check-tools        # verifies gcc, go, clang, qemu, mksquashfs
+make kernel             # Linux 6.6.45: defconfig + kvm_guest.config + kernel/microvm_defconfig
+make all                # init, supervisor, daemons, eBPF, BusyBox, images, CLI
+make run                # boots under KVM; add SNAPSHOT_MODEL=internal for qcow2 snapshots
+```
+
+`make run` exposes the guest as VSOCK CID 3 (when `/dev/vhost-vsock` is accessible; `make check-vsock` explains how to fix permissions), the QMP monitor on `unix:/tmp/qmp.sock`, and two forwarded ports: host `8080` → guest `8080` (the `httpd` sample) and host `8000` → guest `80`. Leave the console with <kbd>Ctrl</kbd>+<kbd>A</kbd> <kbd>X</kbd>, or run `karim shutdown` from another terminal. On the serial console you should see init hand off to the supervisor:
+
+```text
+[karim-init] Starting supervisor /sbin/karim-svcd (init remains PID 1)...
+[karim-init] Supervisor /sbin/karim-svcd started (PID 59)
+[karim-svcd] Karim MicroVM Supervisor (karim-svcd) starting (pid 59)...
+[karim-svcd] Host-Guest Control Plane active on AF_VSOCK (Port 1024)
+[karim-svcd] Supervisor handoff complete. Entering main monitoring loop.
+```
+
+## First commands
+
+```bash
+karim ping                      # PONG over vsock://3:1024
+karim ps                        # service table with state, PID and policy
+karim logs kv_store             # last 500 lines of a service's stdout/stderr
+karim obsd                      # eBPF probe states and latency histograms
+karim snapshot save first-boot  # freeze, save VM state, resume, thaw
+karim shutdown                  # stop services in reverse dependency order, power off
+```
+
+## Verify a build
+
+```bash
+make test                       # make ebpf, then go test -v -race ./internal/...
+make verify-reproducible        # two clean builds, byte-for-byte identical images
+KARIM_QEMU_CONTRACT=1 go test -run Contract ./internal/snapshot/   # real QEMU (TCG)
+```
+
+Next: read the [Architecture Overview](/architecture/overview), the [Build & Test](/build/testing) guide for every make target, or jump to the [CLI reference](/reference/cli).

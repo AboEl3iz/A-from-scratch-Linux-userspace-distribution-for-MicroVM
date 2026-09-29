@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Hermetic image builder">
+  <!-- Image package -->
+  <path d="M12 2.8l8 4.4v9.6l-8 4.4-8-4.4V7.2z"/>
+  <path d="M4 7.2l8 4.4 8-4.4" opacity="0.55"/>
+  <path d="M12 11.6v9.6" opacity="0.55"/>
+  <!-- Reproducibility check -->
+  <path d="M14.5 15.2l1.6 1.6 3-3.4" stroke="#0ea5e9"/>
+</svg>

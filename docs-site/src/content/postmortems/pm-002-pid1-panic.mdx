@@ -1,0 +1,51 @@
+# PM-002: PID 1 exits into a kernel panic
+
+| | |
+|---|---|
+| **Severity** | Critical |
+| **Component** | `cmd/karim-svcd`, `init/init.c` |
+| **Detected** | 2026-09-29, code audit |
+| **Status** | Resolved |
+
+## Summary
+
+`karim-svcd` ran as PID 1, because the C init `execve`d into it. Several paths terminated that process. The SIGTERM handler called `os.Exit(0)`; a dependency cycle called `os.Exit(1)`; and any Go fatal error ended it too, including one reachable at boot through an unlocked map write. When init exits, the kernel panics, and with `panic=0` the VM hangs.
+
+## Impact
+
+- `karim`-initiated or host-initiated shutdown ended in `Kernel panic - not syncing: Attempted to kill init!` rather than a power-off. Services got no grace period and filesystems were never synced.
+- A single cyclic `after` in any service file made the VM unbootable.
+- A `karim ps` issued during boot could trigger `fatal error: concurrent map read and map write`, which `recover` cannot catch, and so a kernel panic.
+- Every service ran as root, and `tgkill` is allowed by `app-default`, so any service could deliver SIGTERM to PID 1 and take the VM down.
+
+## Root cause
+
+- **No lifecycle contract:** PID 1 treated shutdown like an ordinary program exit.
+- **Premature publication:** the control plane started serving `managedServices` before the boot loop had finished writing it, and the writer did not take the lock that readers did.
+- **Signal trust:** the kernel only protects init from signals whose disposition is `SIG_DFL`, and Go installs handlers.
+
+## Resolution
+
+- **Process separation.** The static C init stays PID 1 forever. It forks the supervisor, restarts it with backoff (1 s → 30 s), reaps orphans, and performs the final `reboot(2)`. It consumes signals synchronously with `sigtimedwait`.
+- **Exit-code contract.** The supervisor drains services in reverse dependency order, then exits with 64/65/66 (poweroff/reboot/halt). When it runs as PID 1 itself, it reboots directly and never exits.
+- **Crash containment.** The supervisor runs as init's child and marks itself a child subreaper; on restart it kills leftover service cgroups and cold-starts.
+- **Fail-operational config.** Dependency cycles mark only the involved services `FAILED`; invalid files are skipped.
+- **Registry discipline.** The map is an unexported field behind locked methods, and the registry is filled before listeners open.
+- **Trust boundary.** The shipped demo services run as `nobody` (root is still the default when `user` is omitted), and a shutdown RPC is available only to trusted peers.
+
+See [PID 1 & Lifecycle](/subsystems/pid1-lifecycle).
+
+## Verification
+
+- In the MicroVM: `system_powerdown` stopped services in reverse order and powered off (QEMU exit status 0, no panic).
+- A root service `SIGKILL`ed the supervisor; init restarted it and stale services were killed via their cgroups.
+- A `nobody` service's `kill -TERM 1` failed with `EPERM`.
+
+## Lessons
+
+- In PID 1, "exit" is not an error path; it is a kernel panic.
+- A mutex only protects data if every access takes it. Encapsulate the data so that unsynchronized access does not compile.
+
+## Follow-ups
+
+- Only the supervisor watches the ACPI power button; a press during a supervisor restart is lost.

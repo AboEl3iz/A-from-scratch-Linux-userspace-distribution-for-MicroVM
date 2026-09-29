@@ -1,0 +1,46 @@
+# PM-006: Phantom snapshots
+
+| | |
+|---|---|
+| **Severity** | High (silent data loss at restore time) |
+| **Component** | `internal/qmp`, `internal/snapshot`, `Makefile` |
+| **Detected** | 2026-09-29, code audit; confirmed against real QEMU 8.2.2 |
+| **Status** | Resolved |
+
+## Summary
+
+`karim snapshot save` printed "✅ MicroVM State Snapshot Saved Successfully!" although nothing was saved. The VM's only disk was raw and read-only, which cannot hold internal snapshots. The client drove `savevm` through HMP, which reports its errors as ordinary text, and the `info snapshots` text parser broke on current QEMU output.
+
+## Impact
+
+Operators would discover at restore time that the snapshot they relied on never existed. The "quiesce" step was only `sync(2)`. The VM was resumed unconditionally, even if it had been paused, and nothing was done about the guest clock, entropy or the VSOCK reset after a restore.
+
+## Root cause
+
+- **Topology:** internal snapshots need a writable qcow2 device; the design never provided one.
+- **Interface:** HMP is a human interface tunnelled through QMP. QMP success means only "dispatched".
+- **Test oracle:** the mock server encoded the assumed behavior (`"Snapshot … created successfully"`), so the tests validated the mock.
+
+## Resolution
+
+- Two explicit models: **file** (default: QMP migration to a file, restore into a QEMU started with `-incoming defer`) and **internal** (job-based `snapshot-save`/`-load`/`-delete` on a guest-invisible qcow2 state node).
+- A native-QMP client with one reader, id-matched responses, event subscriptions and deadlines. HMP was removed.
+- A saga with compensation and partial-outcome warnings (one thaw message is still worded wrongly; see [Snapshots](/subsystems/snapshots#the-save-saga)); a real filesystem freeze with an auto-thaw timer; post-restore thaw, clock resync and RNG reseed.
+- Contract tests against real QEMU that record transcripts; the unit tests replay them.
+
+See [Snapshots & QMP](/subsystems/snapshots).
+
+## Verification
+
+- 6 contract tests passed against QEMU 8.2.2, recording 11 transcripts.
+- The contract tests caught one wrong assumption: vmgenid cannot be rotated in place. The explicit RNG reseed replaced it.
+- In the MicroVM: save (154 MB, 1.5 s), power-off, and restore into a fresh QEMU, with the guest thawed, clock resynced and RNG reseeded.
+
+## Lessons
+
+- A success message is a claim about the world. Verify it against the world (the file exists, the job concluded without error).
+- Record the real system once, then replay it; never hand-write the oracle.
+
+## Follow-ups
+
+None open for this defect.

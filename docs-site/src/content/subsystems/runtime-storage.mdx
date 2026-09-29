@@ -1,0 +1,82 @@
+# Runtime Storage
+
+Inside the booted guest, `internal/stored` makes the read-only SquashFS root filesystem usable and gives services writable scratch space. It runs as boot step 1 of `karim-svcd`, before networking and before any service starts. Disable it with `karim-svcd -enable-overlay=false`.
+
+<Callout type="note">
+`stored` works at **runtime in the guest**. Building the images and extracting OCI layers happen **on the build host**; see [Image Builder](/build/image-builder) and [OCI Layer Extraction](/subsystems/oci-layers).
+</Callout>
+
+## Two images, one namespace
+
+The kernel boots with two images from the build:
+
+| Image | Attached as | Role |
+|---|---|---|
+| `initramfs.cpio` | `-initrd` | becomes `/` (the kernel's in-memory rootfs); holds `/init`, the daemons, BusyBox and service definitions |
+| `rootfs.sqsh` | `-drive if=virtio,format=raw,readonly=on` → `/dev/vda` | the larger, compressed tree: merged OCI layers, workloads, `/etc/passwd` |
+
+Karim never calls `switch_root`. The initramfs stays the root filesystem for the life of the VM, and the SquashFS image is mounted beside it.
+
+<MountLayoutDiagram />
+
+## What `PrepareAndMountRootOverlay` does
+
+`karim-svcd` calls `stored.PrepareAndMountRootOverlay("/mnt/lower", "/run/karim/overlay", "/")`:
+
+1. **Mount the SquashFS image read-only.** It tries `/dev/vda`, `/dev/sda` and `/dev/initrd` in that order and mounts the first one that works on `/mnt/lower` with `MS_RDONLY`. If `/mnt/lower` is already a mount point (for example after a supervisor restart), nothing is mounted again. If no device can be mounted, it logs a notice and boot continues from the initramfs alone.
+2. **Make ephemeral paths writable.** `/var`, `/tmp` and `/run` each get a `tmpfs` (`size=64M,mode=0755`) unless they are already mount points.
+3. **Expose the image at `/`.** `LinkLowerDirToRoot` walks the top level of `/mnt/lower` and skips `proc`, `sys`, `dev`, `mnt` and `run`:
+   - if `/<name>` does not exist, it creates a symlink to the SquashFS entry;
+   - if both sides are directories (such as `/etc` or `/usr`), it recurses. Missing sub-directories become real directories on the writable root, and missing files become symlinks into `/mnt/lower`.
+
+   Entries already in the initramfs therefore **win**, and anything that only exists in the image shows up through a link.
+4. **Prepare overlay directories.** It mounts a `tmpfs` on `/run/karim/overlay` and creates `upper/` and `work/` there.
+5. **Mount OverlayFS only on a non-root target.** For `target = "/"`, which is what the supervisor passes, this step is skipped. Linux cannot put an overlay over the initramfs root without `switch_root`, so step 3 is the mechanism that actually applies.
+
+```go title="internal/stored/stored.go"
+// 6. Attempt OverlayFS mount if target is custom mount point (non-root)
+if targetDir != "/" {
+	if _, err := os.Stat(lowerDir); err == nil {
+		if err := MountOverlay(cfg); err != nil { /* warning */ }
+	}
+}
+```
+
+The boot log still prints `OverlayFS mounted successfully: lower=/mnt/lower -> target=/` when the function returns without error. Read that line as "storage step finished", not as a claim that an overlay is mounted on `/`.
+
+## Resulting semantics
+
+| Path | Writable | Persists across reboot | Notes |
+|---|---|---|---|
+| `/` (initramfs) | yes | no | RAM-backed; files from the image appear as symlinks |
+| `/mnt/lower` | no | image content only | the SquashFS tree, `MS_RDONLY` |
+| `/var`, `/tmp`, `/run` | yes | no | 64 MiB tmpfs each |
+| `/run/karim/overlay` | yes | no | upper/work for overlays on non-root targets |
+
+A service can create new files next to linked ones (for example in `/etc`). Writing *through* a symlink into `/mnt/lower` fails with `EROFS`, which is the intended protection for the image. To change a file that comes from the image, delete the link and write a new file in its place.
+
+Nothing in the guest persists. The only durable state is a [snapshot](/subsystems/snapshots) of the whole VM.
+
+## Other helpers
+
+| Function | Purpose |
+|---|---|
+| `BuildOverlayOptions(lower, upper, work)` | formats `lowerdir=…,upperdir=…,workdir=…` |
+| `MountOverlay(cfg)` | `mount("overlay", target, "overlay", 0, opts)` and validates that every path is set |
+| `UnmountOverlay(target)` | lazy unmount (`MNT_DETACH`), `EINVAL` treated as "not mounted" |
+| `IsMountPoint(path)` | exact match in `/proc/mounts`, with a `st_dev` comparison as fallback |
+
+## Interaction with snapshots and shutdown
+
+- **Snapshots:** the guest `Freezer` (`internal/system`) runs `FIFREEZE` only on writable, block-backed filesystems. SquashFS is read-only and tmpfs has no block device, so in the default layout `sync` is the only quiesce step that applies.
+- **Shutdown:** init remounts block-backed filesystems read-only before `reboot(2)`; see [PID 1 & Lifecycle](/subsystems/pid1-lifecycle).
+
+<Callout type="open" title="Known gaps">
+- The OverlayFS mount on `/` never happens (see step 5), and the log line suggests it does.
+- Both link walks ignore errors, so an entry that fails to link is skipped silently.
+- The three tmpfs mounts are fixed at 64 MiB; a service that fills `/tmp` gets `ENOSPC` with no warning from the supervisor.
+</Callout>
+
+## Tests
+
+`internal/stored/stored_test.go` checks option formatting, directory preparation, `IsMountPoint`, and the rejection of an incomplete `OverlayConfig`. Mounting needs `CAP_SYS_ADMIN` and is exercised in the booted MicroVM. `make test-phase2` runs this suite.

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="RCA and troubleshooting">
+  <!-- Diagnostic lens -->
+  <circle cx="10.5" cy="10.5" r="6.5"/>
+  <path d="M15.3 15.3L21 21"/>
+  <!-- Crosshair -->
+  <path d="M10.5 6.5v2M10.5 12.5v2M6.5 10.5h2M12.5 10.5h2" stroke="#f43f5e"/>
+  <circle cx="10.5" cy="10.5" r="1" fill="#f43f5e" stroke="none"/>
+</svg>

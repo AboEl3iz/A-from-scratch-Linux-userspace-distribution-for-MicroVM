@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Security and isolation">
+  <!-- Micro-shield -->
+  <path d="M12 2.8l7 2.6v5.4c0 4.6-3 8.1-7 10.4-4-2.3-7-5.8-7-10.4V5.4z"/>
+  <!-- Thread lock -->
+  <rect x="9" y="11" width="6" height="5" rx="1.2" stroke="#6366f1"/>
+  <path d="M10.3 11V9.6a1.7 1.7 0 0 1 3.4 0V11" stroke="#6366f1"/>
+</svg>

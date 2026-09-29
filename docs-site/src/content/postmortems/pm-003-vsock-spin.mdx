@@ -1,0 +1,58 @@
+# PM-003: Every VSOCK disconnect spins at 100 % CPU
+
+| | |
+|---|---|
+| **Severity** | Critical |
+| **Component** | `internal/vsockd/transport.go` |
+| **Detected** | 2026-09-29, code audit; reproduced over a socketpair |
+| **Status** | Resolved |
+
+## Summary
+
+`VSockConn.Read` returned `(0, nil)` when the peer closed the connection. `io.ReadFull`, used by `ReadFrame`, loops while the error is nil, so every control-plane connection that ended left a goroutine inside the supervisor issuing `read(2)` in a tight loop forever.
+
+## Impact
+
+- One hot goroutine per host CLI invocation. Each spun on a blocking `read` in its own OS thread, so they accumulated until a vCPU was saturated.
+- Deadlines were no-ops, so a stuck guest hung the CLI forever.
+- `Close` could not wake a thread blocked in `accept` or `read`.
+- Short writes were reported as success, silently truncating large frames.
+- `accept` followed by a separate `CloseOnExec` let listener descriptors leak into concurrently spawned services.
+
+## Root cause
+
+A violation of the `io.Reader` contract: `(0, nil)` is only permitted for zero-length buffers. `read(2)` returns 0 at orderly shutdown, and the wrapper passed that through:
+
+```go title="before"
+func (c *VSockConn) Read(b []byte) (n int, err error) {
+	n, err = unix.Read(c.fd, b)
+	if err != nil {
+		return 0, err
+	}
+	return n, nil // 0, nil at EOF
+}
+```
+
+The transport bypassed Go's netpoller entirely, so no standard-library safety net applied.
+
+## Resolution
+
+Sockets are created with `SOCK_NONBLOCK|SOCK_CLOEXEC` and wrapped in `*os.File`, which registers them with the netpoller. Accept uses `accept4` inside `RawConn.Read`; connect is non-blocking and confirmed via `SO_ERROR`. As a result EOF is `io.EOF`, deadlines work, `Close` unblocks waiters, and writes are all-or-error. Framing now buffers only what actually arrives. The server tracks connections (64 maximum), applies idle and write timeouts, and recovers from panics.
+
+See [VSOCK Transport](/subsystems/vsock-transport).
+
+## Verification
+
+- A regression test: after the peer closes, `ReadFrame` returns `io.EOF` within 2 s (before the fix it spun until the watchdog fired).
+- A real AF_VSOCK loopback test.
+- In the MicroVM: 100 host connections, with goroutines 24 → 24 and QEMU at ≈ 0.5 % CPU afterwards.
+
+## Lessons
+
+- Interface contracts (`io.Reader`, `io.Writer`, `net.Conn`) are invisible to the compiler; test them explicitly.
+- A custom `net.Conn` should delegate to the runtime poller rather than re-implement it.
+
+## Follow-ups
+
+- **CLI timeouts.** Deadlines now work in the transport, but the `karim` CLI does not set any yet. `sendRPC` and the `trace` client dial without a timeout and set no read or write deadline, so a stuck guest can still hang an ordinary CLI command. Only the snapshot orchestrator bounds its calls (3 s dial, 90 s deadline).
+- `EnsureFDIsNotInherited` (a non-atomic `CloseOnExec`) is still exported but unused, and can be deleted.

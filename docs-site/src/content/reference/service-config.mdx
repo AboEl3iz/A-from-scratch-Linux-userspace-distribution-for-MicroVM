@@ -1,0 +1,53 @@
+# Service Definitions
+
+Services are defined in TOML files in `/etc/karim/services` (in the source tree: `config/services`). Unknown keys are ignored. An invalid file is reported and skipped: it never prevents the other services from booting.
+
+```toml title="config/services/kv_store.toml"
+name = "kv_store"
+exec = "/bin/kv_store"
+args = []
+restart = "always"
+user = "nobody"
+seccomp_profile = "net-service"
+memory_limit = "16M"
+cpu_quota = "25%"
+after = ["httpd"]
+
+[env]
+PATH = "/bin:/usr/bin:/sbin"
+LOG_LEVEL = "info"
+```
+
+## Keys
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `name` | string | file name without `.toml` | `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`, no `..`; mandatory for `karim apply` / `run` |
+| `exec` | string | (required) | absolute path of the binary |
+| `args` | array | `[]` | arguments |
+| `env` / `[env]` | array / table | — | extra environment (`PATH`, `LD_LIBRARY_PATH`, `HOME`, `TMPDIR` are always set) |
+| `directory` | string | — | working directory |
+| `root_dir` | string | — | `chroot(2)` into this path before exec |
+| `user`, `group` | string | supervisor identity (root) | name or numeric ID; supplementary groups are cleared |
+| `after` | array | `[]` | start after these services; unknown names are ignored |
+| `restart` | string | `on-failure` | `always`, `on-failure`, `never` |
+| `max_restarts` | int | `0` (unlimited) | restarts allowed within `restart_window` |
+| `restart_window` | duration | `5m` | sliding window for `max_restarts` (`"120"` or `"2m"`) |
+| `stop_timeout` | duration | `10s` | SIGTERM → SIGKILL grace period |
+| `memory_limit` | size | unlimited | `cgroup memory.max`; `K`/`KB`, `M`/`MB`, `G`/`GB` suffixes |
+| `cpu_quota` | percent | unlimited | `cgroup cpu.max`, e.g. `"50%"` = 50 ms per 100 ms |
+| `seccomp_profile` | string | `app-default` | `app-default`, `net-service`, `strict`, `unrestricted` |
+| `capabilities_add` | array | `[]` | capabilities kept by `karim-secd` |
+| `capabilities_drop` | array | — | see the open issue below |
+| `no_new_privs` | bool | `true` | pass `-no-new-privs=false` to `karim-secd` when false |
+
+## Semantics
+
+- **Exit classification.** Exit 0 is *clean*. A non-zero code, or a signal the supervisor did not send, is a *failure*. A termination caused by `karim stop`, a replace or a shutdown is *stopped* and never triggers a restart.
+- **Backoff.** 1 s, doubling to 30 s, reset after a run of 10 s or more.
+- **Dependencies.** Ordering only: a dependency is started before its dependents, but readiness is not awaited. Services in a dependency cycle are marked `FAILED` with the reason.
+- **Isolation.** Each service gets `/sys/fs/cgroup/karim/<name>`, is cloned directly into it, and leads its own process group.
+
+<Callout type="open" title="Known issues">
+`capabilities_drop` is ignored and an unknown capability name leaves full capabilities; `strict` cannot exec; `app-default` kills BusyBox userland. See [Security](/subsystems/security).
+</Callout>

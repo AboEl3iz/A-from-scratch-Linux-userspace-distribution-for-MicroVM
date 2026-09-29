@@ -1,0 +1,224 @@
+# karim CLI
+
+`karim` is the host-side management tool. It reaches the guest control plane over AF_VSOCK or a Unix socket, and QEMU over QMP.
+
+```text
+karim [--target <addr>] <command> [args...]
+```
+
+Command names are case-insensitive. Run `karim` with no arguments (or `help`, `-h`, `--help`) to print the command list.
+
+## Global flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--target` | `vsock://3:1024` | Control-plane address. Accepts `vsock://CID:PORT`, `unix:///path/to/socket`, `tcp://host:port`, a bare path (`/…` or `./…`, dialed as Unix), or a bare `host:port` (dialed as TCP) |
+
+TCP peers are never trusted, so privileged commands always fail over TCP. No shipped daemon listens on TCP; it exists for tests.
+
+## Exit status and errors
+
+| Status | When |
+|---|---|
+| 0 | success; also `karim` with no command and `karim snapshot` with no subcommand (both print usage) |
+| 1 | any runtime error, printed to stderr |
+| 2 | a flag that cannot be parsed |
+
+Neither command sets a dial timeout or a read deadline, so a guest that accepts the connection but never answers makes the command hang. Interrupt it with Ctrl+C. See [PM-003 follow-ups](/postmortems/pm-003-vsock-spin#follow-ups).
+
+A privileged command from an untrusted peer fails like this:
+
+```text
+Server error: permission denied: "stop_service" requires a trusted peer (connected as vsock cid=1)
+```
+
+## Command index
+
+| Command | Aliases | Privileged |
+|---|---|---|
+| `ping` | | |
+| `ps` | `list` | |
+| `start <service>` | | ✓ |
+| `stop <service>` | | ✓ |
+| `logs <service>` | | |
+| `apply <file.toml>` | | ✓ |
+| `run --name … --exec …` | | ✓ |
+| `metrics` | `top` | |
+| `obsd` | `ebpf` | |
+| `trace` | `execsnoop` | |
+| `system` | `status`, `hardd` | |
+| `shutdown [action]` | `poweroff`, `reboot`, `halt` | ✓ |
+| `snapshot <sub>` | `qmp` | host-side (QMP) + privileged guest calls |
+| `build` | `image` | host-only |
+| `import <archive>` | `layer` | host-only |
+
+## Service commands
+
+### `karim ps`
+
+Lists every registered service, sorted by name, with its state, PID, executable, memory limit, seccomp profile and restart policy. The states are `STOPPED`, `STARTING`, `RUNNING`, `STOPPING`, `TERMINATED`, `BACKOFF` and `FAILED`.
+
+```bash
+$ karim ps
+SERVICE      STATE        PID   EXEC              MEMORY      SECCOMP       RESTART
+-------      -----        ---   ----              ------      -------       -------
+httpd        RUNNING      75    /bin/httpd        unlimited   net-service   on-failure
+kv_store     RUNNING      84    /bin/kv_store     16MB        net-service   always
+sample_app   TERMINATED   0     /bin/sample_app   32MB        app-default   never
+```
+
+Memory is shown in whole MiB. With nothing registered, the command prints `No active services reported by supervisor.` The underlying RPC also returns `restarts`, `last_exit`, `reason`, `user`, `cpu_quota` and `after` for each service.
+
+### `karim start <service>`
+
+Starts a registered service. It fails with `service <name> is already running`, `… is stopping`, or `service <name>: service not found`. **Privileged.**
+
+- A service that is `STOPPED`, `TERMINATED` or `FAILED` starts with a fresh restart budget.
+- A service in `BACKOFF` starts immediately and keeps its budget.
+- A launch error (for example a missing binary) marks the service `FAILED` and is returned; it is not retried.
+
+### `karim stop <service>`
+
+Sends SIGTERM and **waits until the process has exited**. After `stop_timeout` (default 10 s) it escalates to SIGKILL for the whole service cgroup, or for the process group when cgroups are unavailable. If the process has still not exited 5 s after SIGKILL, the command fails with `service <name> (PID n) did not exit after SIGKILL`. The restart policy never undoes a stop. **Privileged.**
+
+```bash
+$ karim stop kv_store
+[karim-cli] service kv_store stopped successfully
+```
+
+### `karim logs <service>`
+
+Prints the last 500 lines of the service's stdout and stderr, oldest first. Each line is prefixed `[karim-svcd | <name>]`, with `| ERR` added for stderr.
+- The buffer survives policy restarts.
+- `karim apply` and `karim run` create a new instance, which starts with an empty buffer.
+- An empty buffer prints `(no output captured for <name> yet)`.
+
+### `karim apply <service.toml>`
+
+Hot-loads a service definition without rebooting. **Privileged.**
+
+1. The file is sent as-is; an empty file is rejected by the CLI.
+2. If a service with that name exists, it is retired, and the old instance must be seen to exit.
+3. The new definition is registered and started.
+4. Only after a successful start is the TOML saved to the supervisor's `-config-dir` (default `/etc/karim/services/<name>.toml`), so it survives a supervisor restart. A failed save is only logged. `karim-vsockd` does not save definitions.
+
+```text
+[karim-cli] service (parsed from TOML) loaded and started successfully
+[karim-cli] Service from "kv_store.toml" is now running on vsock://3:1024
+```
+
+### `karim run`
+
+Builds a minimal definition from flags and hot-loads it like `apply`. **Privileged.**
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name` | (required) | service name, `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}` |
+| `--exec` | (required) | absolute path of the binary in the guest rootfs; no arguments |
+| `--memory` | none | memory limit, e.g. `64MB` |
+| `--restart` | `on-failure` | `always`, `on-failure` or `never`. Not validated: any other value behaves like `never` |
+| `--seccomp` | `app-default` | seccomp profile name |
+
+On success it prints `[karim-cli] service <name> started dynamically`.
+
+<Callout type="open">
+The help text lists `network` as a profile, but `karim-secd` accepts only `app-default`, `net-service`, `strict`, `unrestricted`, `none` and `disabled`, so `network` makes the service fail at exec. Use `net-service`. The last three skip `karim-secd` entirely (see [Security](/subsystems/security)).
+</Callout>
+
+## Observability
+
+### `karim obsd`
+
+The header shows `Probe Status:` followed by one of:
+- `ACTIVE (all kernel probes attached)`
+- `DEGRADED (some probes are not attached)`
+- `SIMULATION MODE`, when `karim-obsd` was started with `-simulate`
+
+Next comes one line per eBPF probe with its state: `attached (tp_btf)`, `attached (tracepoint)`, `attached (simulated)`, `loaded`, `failed` or `unsupported`, plus the reason. A probe that has had read errors is marked `[N read errors]`.
+
+The run-queue and block-I/O latency histograms follow, with event count and mean. A probe that is not attached shows `(unavailable: …)` in place of data.
+
+### `karim trace`
+
+Streams exec events: time, PID, parent PID, command name and filename. `…` marks a truncated filename, and simulated events end in `(simulated)`. The command prints the first 8 events and exits. The timestamps record when the CLI decoded each event, not kernel time. The command fails if `karim-obsd` is not reachable at `/run/karim/obsd.sock` inside the guest.
+
+```text
+TIME           PID   PPID   COMM         FILENAME
+17:35:02.449   149   60     karim-secd   /sbin/karim-secd
+17:35:02.454   149   60     sample_app   /bin/sample_app
+```
+
+### `karim metrics` · `karim system` · `karim ping`
+
+- **`metrics`** reports goroutines, heap, system memory and the service count. It also prints a value labelled "Guest Uptime", which is actually the time since the control-plane server started.
+- **`system`** reports the kernel entropy pool (below 1000 bits it is flagged `LOW`), RTC presence, current guest time, debug mode, guest uptime and the kernel command line.
+- **`ping`** checks connectivity (`PONG`).
+
+## Lifecycle
+
+### `karim shutdown [poweroff|reboot|halt]`
+
+Asks the supervisor to stop every service in reverse dependency order, terminate the remaining processes, sync, and then power off, reboot or halt. The action defaults to `poweroff`. `karim poweroff`, `karim reboot` and `karim halt` are aliases. **Privileged.** Not available on `karim-vsockd`.
+
+```text
+[karim-cli] poweroff initiated
+```
+
+An invalid action fails with `unknown shutdown action "<x>" (poweroff, reboot, halt)`.
+
+## Snapshots
+
+```text
+karim snapshot <save|restore|list|delete|status> [tag] [flags]
+```
+
+Subcommand aliases: `create` → `save`, `load` → `restore`, `ls` → `list`, `del`/`rm` → `delete`.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--qmp-socket` | `$KARIM_QMP_SOCKET` or `/tmp/qmp.sock` | QMP endpoint; the flag wins over the environment |
+| `--model` | `$KARIM_SNAPSHOT_MODEL` or `file` | `file` or `internal`; anything else fails with `unknown snapshot model` |
+| `--state-dir` | `dist/snapshots` | where file-model snapshots are stored |
+| `--pause-vm` | `true` | stop vCPUs while saving (`--pause-vm=false` for a live migration) |
+| `--wait-qmp` | `0` | keep retrying the QMP connection, e.g. `30s` right after starting QEMU |
+
+```bash
+karim snapshot save before-upgrade
+make run-restore SNAPSHOT=before-upgrade       # file model: fresh QEMU with -incoming defer
+karim snapshot list
+karim snapshot delete before-upgrade
+karim snapshot status                          # Hypervisor QMP Status: running (Running: true, Singlestep: false)
+karim snapshot save t1 --model internal         # requires: make run SNAPSHOT_MODEL=internal
+```
+
+Snapshot commands also use the global `--target`:
+- `save` asks the guest to quiesce before saving and to thaw afterwards.
+- `restore` asks it to thaw, resync its clock and reseed its RNG.
+
+If the guest can't be reached, the snapshot is still taken but is only crash-consistent, and a warning says so.
+
+`save` reports whether the guest was quiesced, whether the VM was resumed, and any warnings about steps that were not undone. `restore` reports whether the guest RNG was reseeded. Tags must match `[A-Za-z0-9][A-Za-z0-9._-]{0,63}` and must not contain `..`. Each operation times out after 10 minutes.
+
+## Images
+
+### `karim build`
+
+| Flag | Default |
+|---|---|
+| `--out-dir` | `dist` |
+| `--init-bin` | `build/init` |
+| `--svcd-bin` | `build/karim-svcd` |
+| `--services-dir` | `config/services` |
+| `--layers-file` | `config/layers.toml` |
+| `--kernel` | `dist/bzImage` (hashed into the manifest, not packaged) |
+| `--epoch` | `0` (fixed timestamp) |
+| `--verify-reproducible` | `false`: build twice and compare SHA-256 |
+
+It produces `initramfs.cpio`, `rootfs.sqsh` and `manifest.json`. Metadata from image layers reaches the SquashFS through a pseudo file. [Image Builder](/build/image-builder) explains what goes into each image.
+
+### `karim import <archive.tar | oci:image:tag | docker:image:tag | docker-archive:…> [layer-name]`
+
+Inspects an image archive and registers it in `./config/layers.toml` (relative to the current directory) with its absolute path, `target_dir = "/"` and a `sha256` pin. The build refuses the layer if the archive later changes.
+
+- If the argument is not a local file, `import` exports it with `docker save`. The exception is a name ending in `.tar`, `.tgz` or `.tar.gz`, which is reported as missing.
+- The default layer name is `imported-oci`. After a `docker save` it is the image reference with `/` and `:` replaced by `_`.

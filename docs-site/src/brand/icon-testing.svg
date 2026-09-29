@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Build and test">
+  <!-- Flask -->
+  <path d="M9 3h6"/><path d="M10 3v5.5L4.8 18a2 2 0 0 0 1.8 3h10.8a2 2 0 0 0 1.8-3L14 8.5V3"/>
+  <path d="M7 15h10" opacity="0.55"/>
+  <!-- Pass -->
+  <path d="M9.5 18l1.8 1.6 3.2-3.4" stroke="#14b8a6"/>
+</svg>

@@ -1,0 +1,62 @@
+# PM-001: The reaper that stole exit codes
+
+| | |
+|---|---|
+| **Severity** | Critical |
+| **Component** | `cmd/karim-svcd`, `internal/svcd` |
+| **Detected** | 2026-09-29, code audit; reproduced with three scratch tests |
+| **Status** | Resolved |
+
+## Summary
+
+Three defects in the service supervisor combined into a self-reinforcing failure. The PID-1 zombie reaper raced each service's `exec.Cmd.Wait`, and the loser invented exit code 1. A recorded exit code was never cleared, so it stuck to every later run. `Stop()` was undone by the restart policy.
+
+## Impact
+
+- `on-failure` services that exited cleanly were restarted as if they had failed (reproduced: `/bin/true` was restarted).
+- After one real failure, a service crash-looped **forever**, even when every later run exited 0 (reproduced: `/bin/true` restarted until `max_restarts`).
+- `karim stop` did not stop `restart = "always"` services. A rolling update could leave the old instance running outside the registry, where it could neither be seen nor stopped.
+
+## Detection
+
+Code review of `cmd/karim-svcd/main.go` showed `syscall.Wait4(-1, …)` in the SIGCHLD loop, alongside a per-service goroutine blocked in `Cmd.Wait()`. Scratch tests then confirmed all three behaviors against the unmodified code.
+
+## Root cause
+
+A zombie can be reaped exactly once. Two independent waiters competed for it. When `wait4(-1)` won, `Cmd.Wait()` received `ECHILD`, and the monitor mapped that string to exit code 1:
+
+```go title="before: internal/svcd/supervisor.go"
+} else if strings.Contains(err.Error(), "no child processes") {
+	exitCode = 1
+```
+
+A side channel (`RecordExitStatus`) was added to patch this. It published the status only *after* the reaper had reaped, taken a lock and scanned a map, so the monitor could observe `ECHILD` inside that window. It also set a sticky flag on the long-lived service object, which no run boundary ever reset.
+
+## Contributing factors
+
+- State lived on the service rather than on each run.
+- Operator intent was not an input to the restart decision; SIGINT from `Stop()` produced exit code −1, which counted as a failure.
+- `State` and `Cmd` were read without the service lock (race-detector-confirmed).
+
+## Resolution
+
+- **A single reaper** (`internal/svcd/reaper.go`): peek with `waitid(P_ALL, WEXITED|WNOHANG|WNOWAIT)`, resolve the owner while the zombie pins the PID, reap that PID, deliver a structured `ExitStatus`. `Spawn` registers the owner under the same lock, so instant exits are attributed correctly. `Cmd.Wait` is banned in the supervisor.
+- **Per-run records**: every launch has a run ID, and stale events are dropped.
+- **An actor per service** with desired state separated from observed state. The pure restart decision never restarts a stopped or stopping service; the backoff is a cancellable timer; stop escalates to `cgroup.kill`.
+- **Replace** retires the old instance before starting the new one.
+
+See [Supervisor Internals](/subsystems/supervisor).
+
+## Verification
+
+- Deterministic state-machine tests (fake launcher and clock), plus real-process tests under `-race`, 15 consecutive clean runs.
+- In the MicroVM: a stopped `restart = "always"` service stayed stopped, `sample_app` stayed `TERMINATED` after exit 0, and every exit was reported with its true code or signal.
+
+## Lessons
+
+- A resource that can be consumed once needs exactly one consumer. Patch-on-patch side channels hide the race instead of removing it.
+- Keep lifecycle state on the unit of lifecycle, which here is the run.
+
+## Follow-ups
+
+None open for this defect.

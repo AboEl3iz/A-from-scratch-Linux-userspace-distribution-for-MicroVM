@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Supervisor and init">
+  <!-- Layered process frames (init -> supervisor -> service) -->
+  <rect x="3" y="3" width="13" height="13" rx="3" opacity="0.45"/>
+  <rect x="8" y="8" width="13" height="13" rx="3"/>
+  <!-- Process tick -->
+  <path d="M11.5 14.5l2 2 4-4.5" stroke="#14b8a6"/>
+</svg>
