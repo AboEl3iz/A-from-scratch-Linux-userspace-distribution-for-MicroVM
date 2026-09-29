@@ -84,3 +84,55 @@ func TestManifestComparison(t *testing.T) {
 		t.Fatalf("CompareManifests expected failure on hash mismatch, but succeeded")
 	}
 }
+
+func TestBusyboxStaging(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "busybox-stage-test-*")
+	if err != nil {
+		t.Fatalf("Failed creating temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	buildDir := filepath.Join(tmpDir, "build")
+	distDir := filepath.Join(tmpDir, "dist")
+	servicesDir := filepath.Join(tmpDir, "config", "services")
+	_ = os.MkdirAll(buildDir, 0755)
+	_ = os.MkdirAll(distDir, 0755)
+	_ = os.MkdirAll(servicesDir, 0755)
+
+	// Create mock binaries
+	mockInit := filepath.Join(buildDir, "init")
+	mockSvcd := filepath.Join(buildDir, "karim-svcd")
+	mockBusybox := filepath.Join(buildDir, "busybox")
+
+	_ = os.WriteFile(mockInit, []byte("#!/bin/sh\necho init"), 0755)
+	_ = os.WriteFile(mockSvcd, []byte("#!/bin/sh\necho svcd"), 0755)
+	_ = os.WriteFile(mockBusybox, []byte("#!/bin/sh\necho busybox"), 0755)
+
+	cfg := BuildConfig{
+		InitBinPath:     mockInit,
+		SvcdBinPath:     mockSvcd,
+		ServicesDir:     servicesDir,
+		LayersFile:      "",
+		KernelPath:      "",
+		OutputDir:       distDir,
+		SourceDateEpoch: 0,
+	}
+
+	manifest, err := BuildImagePipeline(cfg)
+	if err != nil {
+		t.Fatalf("BuildImagePipeline failed with BusyBox present: %v", err)
+	}
+
+	if manifest == nil {
+		t.Fatal("Expected non-nil manifest")
+	}
+
+	// Verify initramfs.cpio and rootfs.sqsh exist
+	if _, err := os.Stat(filepath.Join(distDir, "initramfs.cpio")); err != nil {
+		t.Errorf("initramfs.cpio missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(distDir, "rootfs.sqsh")); err != nil {
+		t.Errorf("rootfs.sqsh missing: %v", err)
+	}
+}
+
