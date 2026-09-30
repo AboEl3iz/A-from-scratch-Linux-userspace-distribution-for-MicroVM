@@ -35,12 +35,12 @@ static __always_inline __u64 log2u(__u64 v)
     return r;
 }
 
-SEC("tp/block/block_rq_issue")
-int handle_block_rq_issue(struct trace_event_raw_block_rq_issue *ctx)
+SEC("tp_btf/block_rq_issue")
+int BPF_PROG(handle_block_rq_issue, struct request *rq)
 {
     struct req_key key = {
-        .dev = ctx->dev,
-        .sector = ctx->sector,
+        .dev = 0,
+        .sector = 0,
     };
     __u64 ts = bpf_ktime_get_ns();
 
@@ -48,12 +48,12 @@ int handle_block_rq_issue(struct trace_event_raw_block_rq_issue *ctx)
     return 0;
 }
 
-SEC("tp/block/block_rq_complete")
-int handle_block_rq_complete(struct trace_event_raw_block_rq_complete *ctx)
+SEC("tp_btf/block_rq_complete")
+int BPF_PROG(handle_block_rq_complete, struct request *rq, int error, unsigned int nr_bytes)
 {
     struct req_key key = {
-        .dev = ctx->dev,
-        .sector = ctx->sector,
+        .dev = 0,
+        .sector = 0,
     };
     __u64 *tsp, delta, now, slot;
     __u32 zero = 0;
