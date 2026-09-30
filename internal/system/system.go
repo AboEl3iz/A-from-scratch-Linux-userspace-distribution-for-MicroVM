@@ -7,6 +7,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -92,4 +95,104 @@ func GetSystemStatus() (*SystemStatus, error) {
 		KernelCmdline: ReadKernelCmdline(),
 		UptimeSeconds: GetUptimeSeconds(),
 	}, nil
+}
+
+const (
+	FIFREEZE = 0xc0045877
+	FITHAW   = 0xc0045878
+)
+
+// FreezeFilesystem flushes dirty pages and issues FIFREEZE ioctl on mountPath (default "/").
+func FreezeFilesystem(mountPath string) error {
+	if mountPath == "" {
+		mountPath = "/"
+	}
+	syscall.Sync()
+
+	f, err := os.Open(mountPath)
+	if err != nil {
+		return fmt.Errorf("failed opening mount %s for freeze: %w", mountPath, err)
+	}
+	defer f.Close()
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(FIFREEZE), 0)
+	if errno != 0 && errno != syscall.EBUSY && errno != syscall.EINVAL && errno != syscall.ENOTTY {
+		return fmt.Errorf("FIFREEZE ioctl failed on %s: %w", mountPath, errno)
+	}
+	return nil
+}
+
+// ThawFilesystem issues FITHAW ioctl on mountPath (default "/") to resume VFS transactions.
+func ThawFilesystem(mountPath string) error {
+	if mountPath == "" {
+		mountPath = "/"
+	}
+
+	f, err := os.Open(mountPath)
+	if err != nil {
+		return fmt.Errorf("failed opening mount %s for thaw: %w", mountPath, err)
+	}
+	defer f.Close()
+
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(FITHAW), 0)
+	if errno != 0 && errno != syscall.EINVAL && errno != syscall.ENOTTY {
+		return fmt.Errorf("FITHAW ioctl failed on %s: %w", mountPath, errno)
+	}
+	return nil
+}
+
+// ReseedEntropy injects fresh host entropy into /dev/urandom on microVM snapshot restore.
+func ReseedEntropy() error {
+	hwrng, err := os.Open("/dev/hwrng")
+	var randBuf []byte
+	if err == nil {
+		randBuf = make([]byte, 512)
+		n, _ := hwrng.Read(randBuf)
+		hwrng.Close()
+		if n > 0 {
+			randBuf = randBuf[:n]
+		} else {
+			randBuf = nil
+		}
+	}
+
+	if len(randBuf) == 0 {
+		randBuf = make([]byte, 64)
+		nowNano := time.Now().UnixNano()
+		pid := os.Getpid()
+		for i := 0; i < len(randBuf); i++ {
+			randBuf[i] = byte((nowNano >> (i % 8 * 8)) ^ int64(pid+i))
+		}
+	}
+
+	urandom, err := os.OpenFile("/dev/urandom", os.O_WRONLY, 0)
+	if err == nil {
+		_, _ = urandom.Write(randBuf)
+		urandom.Close()
+	}
+	return nil
+}
+
+// SyncRTCTime resynchronizes system clock CLOCK_REALTIME from hardware RTC device.
+func SyncRTCTime() error {
+	rtcFile, err := os.Open("/dev/rtc0")
+	if err != nil {
+		rtcFile, err = os.Open("/dev/rtc")
+	}
+	if err != nil {
+		return nil
+	}
+	defer rtcFile.Close()
+
+	var rtcTm struct {
+		Sec, Min, Hour, Mday, Mon, Year, Wday, Yday, Isdst int32
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, rtcFile.Fd(), 0x80247009, uintptr(unsafe.Pointer(&rtcTm)))
+	if errno != 0 {
+		return fmt.Errorf("RTC_RD_TIME ioctl failed: %w", errno)
+	}
+
+	tm := time.Date(int(rtcTm.Year)+1900, time.Month(rtcTm.Mon+1), int(rtcTm.Mday), int(rtcTm.Hour), int(rtcTm.Min), int(rtcTm.Sec), 0, time.UTC)
+	ts := unix.NsecToTimespec(tm.UnixNano())
+	return unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
 }
