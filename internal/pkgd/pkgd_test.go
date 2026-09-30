@@ -148,3 +148,34 @@ func TestLayerConfigLoadSave(t *testing.T) {
 
 	t.Log("LayerConfig load/save test PASSED")
 }
+
+func TestTarSlipPrevention(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "pkgd-tarslip-*")
+	if err != nil {
+		t.Fatalf("Failed creating temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	destRoot := filepath.Join(tmpDir, "rootfs")
+	if err := os.MkdirAll(destRoot, 0755); err != nil {
+		t.Fatalf("Failed creating rootfs dir: %v", err)
+	}
+
+	traversalVectors := []string{
+		"../escape.txt",
+		"../../etc/shadow",
+		"/etc/passwd",
+		"foo/bar/../../../../tmp/evil",
+	}
+
+	for _, vec := range traversalVectors {
+		tarData := createTarArchive(map[string]string{
+			vec: "malicious payload",
+		})
+		err := ExtractLayerTarball(bytes.NewReader(tarData), destRoot)
+		if err == nil {
+			t.Fatalf("EXPECTED ERROR for Tar-Slip vector %q, but extraction SUCCEEDED!", vec)
+		}
+		t.Logf("Tar-Slip vector %q successfully REJECTED: %v", vec, err)
+	}
+}
