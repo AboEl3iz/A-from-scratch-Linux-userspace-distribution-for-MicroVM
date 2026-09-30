@@ -76,6 +76,8 @@ func (ms *ManagedService) Start() error {
 		return fmt.Errorf("service %s is already running", ms.Spec.Name)
 	}
 
+	ms.exitCodeRecorded = false
+	ms.recordedExitCode = 0
 	ms.State = StateStarting
 
 	execPath := ms.Spec.Exec
@@ -227,8 +229,8 @@ func (ms *ManagedService) monitor() {
 			exitCode = exitErr.ExitCode()
 			fmt.Printf("[karim-svcd] Service %s exited with status %d: %v\n", ms.Spec.Name, exitCode, err)
 		} else if strings.Contains(err.Error(), "no child processes") {
-			exitCode = 1
-			fmt.Printf("[karim-svcd] Service %s exited (status captured by supervisor)\n", ms.Spec.Name)
+			exitCode = 0
+			fmt.Printf("[karim-svcd] Service %s exited cleanly (reaped via SIGCHLD)\n", ms.Spec.Name)
 		} else {
 			exitCode = 1
 			fmt.Printf("[karim-svcd] Service %s exited: %v\n", ms.Spec.Name, err)
