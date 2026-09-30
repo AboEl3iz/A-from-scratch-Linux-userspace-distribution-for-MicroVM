@@ -2,6 +2,9 @@ package secd
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -45,6 +48,7 @@ func EnforceSecurityPolicy(policy *SecurityPolicy) error {
 
 	// 3. Seccomp BPF Syscall Filtering
 	if policy.SeccompProfile != "" && policy.SeccompProfile != "unrestricted" {
+		SetupSIGSYSHandler()
 		filter, err := GetProfileFilter(policy.SeccompProfile, ActionKillProcess)
 		if err != nil {
 			return fmt.Errorf("secd: invalid seccomp profile %q: %w", policy.SeccompProfile, err)
@@ -55,4 +59,16 @@ func EnforceSecurityPolicy(policy *SecurityPolicy) error {
 	}
 
 	return nil
+}
+
+// SetupSIGSYSHandler installs a signal channel listener for SIGSYS (Seccomp security violations).
+func SetupSIGSYSHandler() {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGSYS)
+	go func() {
+		for sig := range c {
+			fmt.Fprintf(os.Stderr, "[karim-secd | SECURITY WARNING] SIGSYS signal %v received: blocked by Seccomp BPF policy!\n", sig)
+			os.Exit(159)
+		}
+	}()
 }
