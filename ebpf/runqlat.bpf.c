@@ -30,10 +30,10 @@ static __always_inline __u64 log2u(__u64 v)
     return r;
 }
 
-SEC("tp/sched/sched_wakeup")
-int handle_sched_wakeup(struct trace_event_raw_sched_wakeup *ctx)
+SEC("tp_btf/sched_wakeup")
+int BPF_PROG(handle_sched_wakeup, struct task_struct *p)
 {
-    __u32 pid = ctx->pid;
+    __u32 pid = p ? p->pid : 0;
     __u64 ts = bpf_ktime_get_ns();
 
     if (pid == 0)
@@ -43,10 +43,10 @@ int handle_sched_wakeup(struct trace_event_raw_sched_wakeup *ctx)
     return 0;
 }
 
-SEC("tp/sched/sched_switch")
-int handle_sched_switch(struct trace_event_raw_sched_switch *ctx)
+SEC("tp_btf/sched_switch")
+int BPF_PROG(handle_sched_switch, bool preempt, struct task_struct *prev, struct task_struct *next)
 {
-    __u32 next_pid = ctx->next_pid;
+    __u32 next_pid = next ? next->pid : 0;
     __u64 *tsp, delta, now, slot;
     __u32 zero = 0;
     struct hist *histp;
