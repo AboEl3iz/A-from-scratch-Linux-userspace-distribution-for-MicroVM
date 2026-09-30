@@ -26,83 +26,58 @@ type VSockAddr struct {
 func (a *VSockAddr) Network() string { return "vsock" }
 func (a *VSockAddr) String() string  { return fmt.Sprintf("%d:%d", a.CID, a.Port) }
 
-// VSockConn implements net.Conn over an AF_VSOCK file descriptor.
+// VSockConn implements net.Conn over an AF_VSOCK file descriptor integrated with Go netpoller.
 type VSockConn struct {
-	fd    int
+	conn  net.Conn
 	laddr VSockAddr
 	raddr VSockAddr
 }
 
 func (c *VSockConn) Read(b []byte) (n int, err error) {
-	n, err = unix.Read(c.fd, b)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
+	return c.conn.Read(b)
 }
 
 func (c *VSockConn) Write(b []byte) (n int, err error) {
-	n, err = unix.Write(c.fd, b)
-	if err != nil {
-		return 0, err
-	}
-	return n, nil
+	return c.conn.Write(b)
 }
 
 func (c *VSockConn) Close() error {
-	if c.fd >= 0 {
-		err := unix.Close(c.fd)
-		c.fd = -1
-		return err
-	}
-	return nil
+	return c.conn.Close()
 }
 
 func (c *VSockConn) LocalAddr() net.Addr  { return &c.laddr }
 func (c *VSockConn) RemoteAddr() net.Addr { return &c.raddr }
 
-func (c *VSockConn) SetDeadline(t time.Time) error      { return nil }
-func (c *VSockConn) SetReadDeadline(t time.Time) error  { return nil }
-func (c *VSockConn) SetWriteDeadline(t time.Time) error { return nil }
+func (c *VSockConn) SetDeadline(t time.Time) error      { return c.conn.SetDeadline(t) }
+func (c *VSockConn) SetReadDeadline(t time.Time) error  { return c.conn.SetReadDeadline(t) }
+func (c *VSockConn) SetWriteDeadline(t time.Time) error { return c.conn.SetWriteDeadline(t) }
 
-// VSockListener implements net.Listener over an AF_VSOCK listening socket.
+// VSockListener implements net.Listener over an AF_VSOCK listening socket integrated with Go netpoller.
 type VSockListener struct {
-	fd   int
-	addr VSockAddr
+	listener net.Listener
+	addr     VSockAddr
 }
 
 func (l *VSockListener) Accept() (net.Conn, error) {
-	nfd, sa, err := unix.Accept(l.fd)
+	c, err := l.listener.Accept()
 	if err != nil {
 		return nil, err
 	}
-	unix.CloseOnExec(nfd)
-
 	raddr := VSockAddr{CID: unix.VMADDR_CID_ANY, Port: 0}
-	if vmSa, ok := sa.(*unix.SockaddrVM); ok {
-		raddr.CID = vmSa.CID
-		raddr.Port = vmSa.Port
-	}
-
 	return &VSockConn{
-		fd:    nfd,
+		conn:  c,
 		laddr: l.addr,
 		raddr: raddr,
 	}, nil
 }
 
 func (l *VSockListener) Close() error {
-	if l.fd >= 0 {
-		err := unix.Close(l.fd)
-		l.fd = -1
-		return err
-	}
-	return nil
+	return l.listener.Close()
 }
 
 func (l *VSockListener) Addr() net.Addr { return &l.addr }
 
-// ListenVSock creates a net.Listener bound to Linux AF_VSOCK stream socket on specified port.
+// ListenVSock creates a net.Listener bound to Linux AF_VSOCK stream socket on specified port using Go netpoller.
 func ListenVSock(port uint32) (net.Listener, error) {
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
 	if err != nil {
@@ -125,13 +100,22 @@ func ListenVSock(port uint32) (net.Listener, error) {
 		return nil, fmt.Errorf("failed listening on AF_VSOCK socket port %d: %w", port, err)
 	}
 
+	file := os.NewFile(uintptr(fd), "vsock-listener")
+	defer file.Close()
+
+	l, err := net.FileListener(file)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("failed registering AF_VSOCK listener with epoll netpoller: %w", err)
+	}
+
 	return &VSockListener{
-		fd:   fd,
-		addr: VSockAddr{CID: unix.VMADDR_CID_ANY, Port: port},
+		listener: l,
+		addr:     VSockAddr{CID: unix.VMADDR_CID_ANY, Port: port},
 	}, nil
 }
 
-// DialVSock connects to a remote AF_VSOCK endpoint (target CID and Port).
+// DialVSock connects to a remote AF_VSOCK endpoint (target CID and Port) using Go netpoller.
 func DialVSock(cid uint32, port uint32) (net.Conn, error) {
 	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
 	if err != nil {
@@ -149,17 +133,34 @@ func DialVSock(cid uint32, port uint32) (net.Conn, error) {
 		return nil, fmt.Errorf("failed connecting AF_VSOCK socket to CID %d port %d: %w", cid, port, err)
 	}
 
+	file := os.NewFile(uintptr(fd), "vsock-conn")
+	defer file.Close()
+
+	c, err := net.FileConn(file)
+	if err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("failed registering AF_VSOCK conn with epoll netpoller: %w", err)
+	}
+
 	return &VSockConn{
-		fd:    fd,
+		conn:  c,
 		laddr: VSockAddr{CID: unix.VMADDR_CID_ANY, Port: 0},
 		raddr: VSockAddr{CID: cid, Port: port},
 	}, nil
 }
 
-// ListenUnix creates a Unix Domain Socket net.Listener, cleaning up stale socket files if present.
+// ListenUnix creates a Unix Domain Socket net.Listener, enforcing strict 0600 permissions.
 func ListenUnix(socketPath string) (net.Listener, error) {
 	_ = os.Remove(socketPath)
-	return net.Listen("unix", socketPath)
+	l, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Chmod(socketPath, 0600); err != nil {
+		_ = l.Close()
+		return nil, fmt.Errorf("failed setting 0600 permissions on socket %s: %w", socketPath, err)
+	}
+	return l, nil
 }
 
 // DialUnix connects to a Unix Domain Socket endpoint.
