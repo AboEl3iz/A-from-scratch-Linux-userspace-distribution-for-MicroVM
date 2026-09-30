@@ -57,6 +57,8 @@ static void log_error(const char *msg) {
 }
 
 /* Signal handler for SIGCHLD to reap defunct/zombie processes */
+static volatile pid_t g_svcd_pid = -1;
+
 static void sigchld_handler(int sig) {
     (void)sig;
     int saved_errno = errno;
@@ -64,6 +66,9 @@ static void sigchld_handler(int sig) {
     int status;
 
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        if (pid == g_svcd_pid) {
+            g_svcd_pid = -1;
+        }
         if (WIFEXITED(status)) {
             printf("%sReaped child PID %d (exit code %d)\n", LOG_PREFIX, pid, WEXITSTATUS(status));
         } else if (WIFSIGNALED(status)) {
@@ -84,6 +89,13 @@ static void setup_signals(void) {
     if (sigaction(SIGCHLD, &sa, NULL) < 0) {
         log_error("Failed to install SIGCHLD handler");
     }
+
+    struct sigaction sa_ign;
+    memset(&sa_ign, 0, sizeof(sa_ign));
+    sa_ign.sa_handler = SIG_IGN;
+    sigemptyset(&sa_ign.sa_mask);
+    sigaction(SIGUSR1, &sa_ign, NULL);
+    sigaction(SIGUSR2, &sa_ign, NULL);
 }
 
 static void mount_pseudofs(void) {
@@ -285,20 +297,77 @@ int main(int argc, char *argv[], char *envp[]) {
         spawn_debug_shell();
     }
 
-    log_info("Attempting handoff to secondary supervisor (/sbin/karim-svcd)...");
+    log_info("Starting secondary supervisor daemon (/sbin/karim-svcd)...");
     
     char *svcd_argv[] = { "/sbin/karim-svcd", NULL };
-    execve("/sbin/karim-svcd", svcd_argv, envp);
+    
+    if (access("/sbin/karim-svcd", X_OK) != 0) {
+        log_info("Notice: /sbin/karim-svcd not found or not executable. Fallback init loop active.");
+        if (!debug_mode) {
+            spawn_debug_shell();
+        }
+    } else {
+        int backoff_sec = 1;
+        while (1) {
+            pid_t pid = fork();
+            if (pid < 0) {
+                log_error("Failed to fork supervisor process");
+                sleep(2);
+                continue;
+            }
+            if (pid == 0) {
+                /* Execute supervisor */
+                execve("/sbin/karim-svcd", svcd_argv, envp);
+                log_error("Failed to execve /sbin/karim-svcd");
+                _exit(127);
+            }
 
-    /* If execve fails (e.g. Phase 0 before rootfs is attached), fall back to monitoring loop */
-    log_info("Notice: /sbin/karim-svcd not found or failed to execute. Fallback init loop active.");
+            g_svcd_pid = pid;
+            printf("%sSupervisor started with PID %d\n", LOG_PREFIX, pid);
+            fflush(stdout);
 
-    if (!debug_mode) {
-        spawn_debug_shell();
+            /* Monitor loop for supervisor exit */
+            while (g_svcd_pid == pid) {
+                int status;
+                pid_t reaped = waitpid(-1, &status, 0);
+                if (reaped > 0) {
+                    if (reaped == pid) {
+                        g_svcd_pid = -1;
+                        if (WIFEXITED(status)) {
+                            int code = WEXITSTATUS(status);
+                            printf("%sSupervisor (PID %d) exited with code %d\n", LOG_PREFIX, reaped, code);
+                            if (code == 64 || code == 65 || code == 66) {
+                                printf("%sSupervisor initiated system shutdown/reboot (code %d).\n", LOG_PREFIX, code);
+                                fflush(stdout);
+                                sync();
+                                return 0;
+                            }
+                        } else if (WIFSIGNALED(status)) {
+                            printf("%sSupervisor (PID %d) killed by signal %d\n", LOG_PREFIX, reaped, WTERMSIG(status));
+                        }
+                        break;
+                    } else {
+                        if (WIFEXITED(status)) {
+                            printf("%sReaped orphan PID %d (exit code %d)\n", LOG_PREFIX, reaped, WEXITSTATUS(status));
+                        } else if (WIFSIGNALED(status)) {
+                            printf("%sReaped orphan PID %d (killed by signal %d)\n", LOG_PREFIX, reaped, WTERMSIG(status));
+                        }
+                        fflush(stdout);
+                    }
+                }
+            }
+
+            log_info("Supervisor terminated. Reaping remaining orphan processes...");
+            int st;
+            while (waitpid(-1, &st, WNOHANG) > 0);
+
+            log_info("Restarting supervisor daemon...");
+            sleep(backoff_sec);
+            if (backoff_sec < 10) backoff_sec *= 2;
+        }
     }
 
     while (1) {
-        /* Reap any remaining zombies */
         int status;
         while (waitpid(-1, &status, WNOHANG) > 0);
         pause();
