@@ -1,6 +1,7 @@
 #ifndef __VMLINUX_H__
 #define __VMLINUX_H__
 
+typedef _Bool bool;
 typedef unsigned char __u8;
 typedef short int __s16;
 typedef unsigned short __u16;
@@ -18,6 +19,18 @@ typedef __u32 dev_t;
 #define TASK_COMM_LEN 16
 #define MAX_FILENAME_LEN 256
 #define MAX_SLOTS 20
+
+// BTF type forward declarations for tp_btf probes
+struct task_struct {
+    pid_t pid;
+    struct task_struct *real_parent;
+};
+
+struct linux_binprm {
+    const char *filename;
+};
+
+struct request;
 
 // Event structure emitted by execsnoop probe over ringbuffer
 struct exec_event {
