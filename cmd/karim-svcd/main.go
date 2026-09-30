@@ -81,13 +81,26 @@ func (sb *supervisorBridge) GetServiceLogs(name string) (string, error) {
 }
 
 func (sb *supervisorBridge) Quiesce() error {
-	fmt.Println("[karim-svcd] Guest snapshot quiesce requested: issuing syscall.Sync()...")
-	syscall.Sync()
+	fmt.Println("[karim-svcd] Guest snapshot quiesce requested: issuing syscall.Sync() & FIFREEZE ioctl...")
+	if err := system.FreezeFilesystem("/"); err != nil {
+		fmt.Printf("[karim-svcd] Notice: VFS freeze warning: %v\n", err)
+	}
 	return nil
 }
 
 func (sb *supervisorBridge) Unquiesce() error {
-	fmt.Println("[karim-svcd] Guest snapshot thaw requested: resuming normal process execution.")
+	fmt.Println("[karim-svcd] Guest snapshot thaw requested: issuing FITHAW ioctl, reseeding CSPRNG entropy, and syncing RTC time...")
+	if err := system.ThawFilesystem("/"); err != nil {
+		fmt.Printf("[karim-svcd] Notice: VFS thaw warning: %v\n", err)
+	}
+	if err := system.ReseedEntropy(); err != nil {
+		fmt.Printf("[karim-svcd] Notice: CSPRNG entropy reseed warning: %v\n", err)
+	} else {
+		fmt.Println("[karim-svcd] Re-seeded /dev/urandom CSPRNG pool after snapshot restore (nonce reuse mitigation active).")
+	}
+	if err := system.SyncRTCTime(); err != nil {
+		fmt.Printf("[karim-svcd] Notice: RTC time sync warning: %v\n", err)
+	}
 	return nil
 }
 
