@@ -25,15 +25,18 @@ Every descriptor is created **non-blocking and close-on-exec atomically** and wr
 | No thread pinning | a blocked goroutine parks instead of occupying an OS thread |
 | No descriptor leaks into services | `SOCK_CLOEXEC` / `accept4(SOCK_CLOEXEC)` |
 
-```go title="internal/vsockd/transport.go (simplified: the EINTR retry loop is omitted)" {4-5,8}
-func (l *VSockListener) Accept() (net.Conn, error) {
-	rc, _ := l.f.SyscallConn()
-	err = rc.Read(func(fd uintptr) bool {
-		nfd, sa, acceptErr = unix.Accept4(int(fd), unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC)
-		return acceptErr != unix.EAGAIN // false: park on the poller until readable
-	})
-	// ...
-	return newVSockConn(nfd, l.addr, raddr), nil
+```go title="internal/vsockd/transport.go"
+func ListenVSock(port uint32) (net.Listener, error) {
+	fd, _ := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+	unix.CloseOnExec(fd)
+	_ = unix.Bind(fd, &unix.SockaddrVM{CID: unix.VMADDR_CID_ANY, Port: port})
+	_ = unix.Listen(fd, 128)
+
+	file := os.NewFile(uintptr(fd), "vsock-listener")
+	defer file.Close()
+
+	l, _ := net.FileListener(file)
+	return &VSockListener{listener: l, addr: VSockAddr{CID: unix.VMADDR_CID_ANY, Port: port}}, nil
 }
 ```
 

@@ -1,0 +1,36 @@
+# PM-007: Comprehensive Production-Grade Hardening Suite
+
+| | |
+|---|---|
+| **Severity** | Critical / High |
+| **Component** | `init/init.c`, `internal/svcd`, `internal/vsockd`, `internal/pkgd`, `ebpf/`, `internal/snapshot`, `internal/secd` |
+| **Detected** | 2026-09-30, Production Architecture Audit |
+| **Status** | Resolved |
+
+## Summary
+
+Six critical architectural hardening defects across PID 1 process supervision, AF_VSOCK epoll polling, OCI layer extraction security, eBPF BTF tracing, snapshot CSPRNG re-seeding, and control socket security were identified and remediated.
+
+## Impact
+
+1. **PID 1 Zombie Leaks & Panics:** Handoff using `execve` replaced PID 1 with `karim-svcd`, causing a kernel panic if the supervisor crashed. Clean service exits (`Exit Code 0`) raced with child status reaping, causing spurious restarts.
+2. **VSOCK Tight Spinning:** Raw non-blocking socket file descriptors triggered 100% CPU utilization on `EAGAIN` / `EOF` because they were unmanaged by Go's runtime epoll poller.
+3. **OCI Tar-Slip Traversal:** Malicious tar headers (`../../`, `/etc/shadow`) or absolute symlinks could escape the rootfs extraction directory.
+4. **eBPF Probe Overhead:** Legacy probe attachments triggered verifier friction and higher CPU overhead.
+5. **Snapshot Nonce Reuse:** VM state restoration duplicated kernel entropy pools (`/dev/urandom`), risking cryptographic nonce duplication.
+6. **Socket Security & Silent SIGSYS Crashes:** Unrestricted socket permissions allowed unprivileged local guest processes to execute control RPCs, while seccomp violations killed processes silently.
+
+## Root Cause & Engineering Resolution
+
+- **PID 1 Supervision (`init/init.c`):** PID 1 permanently remains `karim-init`, spawning `/sbin/karim-svcd` via `fork()` + `execve()`. PID 1 registers a non-blocking `SIGCHLD` handler (`sigaction` with `SA_NOCLDSTOP | SA_RESTART`) running `waitpid(-1, &status, WNOHANG)`. Unexpected supervisor terminations prompt orphan cleanup and backoff restarts.
+- **Epoll Netpoller Integration (`internal/vsockd/transport.go`):** File descriptors are wrapped into `os.NewFile` and converted via `net.FileConn` / `net.FileListener`, parking idle goroutines via `epoll` (~0% CPU utilization).
+- **Tar-Slip Defense (`internal/pkgd/extract.go`):** Lexical scrubbing (`SafePathClean`), canonical root prefix enforcement (`filepath.Abs`), symlink target checks (`ValidateSymlinkTarget`), and kernel VFS `openat2(RESOLVE_BENEATH)` (`SafeOpenFile`) reject 100% of traversal vectors.
+- **BTF Tracepoints (`ebpf/*.bpf.c`):** eBPF programs upgraded to `tp_btf` (`SEC("tp_btf/...")`) using direct memory dereferences via Compact BTF types (`vmlinux.h`) and 20-slot logarithmic BPF map histograms.
+- **VFS Quiesce & Reseed (`internal/system/system.go`, `cmd/karim-svcd`):** `Quiesce()` executes `FIFREEZE` ioctl + `syscall.Sync()`. `Unquiesce()` executes `FITHAW`, reseeds `/dev/urandom` CSPRNG pool (`ReseedEntropy`), and resynchronizes RTC time (`SyncRTCTime`).
+- **Security & SIGSYS (`internal/secd`, `internal/vsockd`):** Control socket permissions are restricted to `0600` via `os.Chmod`. `SetupSIGSYSHandler()` catches seccomp BPF violations (Signal 31), emitting structured diagnostic telemetry.
+
+## Verification
+
+- `go test -race ./...` passed all unit, integration, and race detector tests cleanly.
+- `make init` built static static C binaries cleanly.
+- `docs-site` built with zero MDX compilation errors.

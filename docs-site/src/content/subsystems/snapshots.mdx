@@ -92,7 +92,7 @@ sequenceDiagram
 Restoring the same snapshot twice would replay identical CSPRNG state in both copies. Two mechanisms prevent that:
 
 1. **vmgenid.** QEMU runs with `-device vmgenid,id=vmgenid0` (`guid=auto`) and the guest kernel has `CONFIG_VMGENID`. A restore into a *fresh* QEMU process exposes a new generation ID after the incoming migration, and the guest driver reseeds.
-2. **Explicit reseed.** An *in-place* restore keeps the process's generation ID, and QEMU rejects changing it (`Attempt to set property 'guid' … after it was realized`, observed in the contract tests). After every restore the orchestrator therefore sends 64 bytes from `crypto/rand`. The guest credits them with `RNDADDENTROPY` and forces an immediate `RNDRESEEDCRNG`.
+2. **Explicit reseed & RTC sync.** An *in-place* restore keeps the process's generation ID. After every restore, `Unquiesce()` invokes `system.ReseedEntropy()` to inject fresh bytes into `/dev/urandom` (crediting entropy and invalidating cached nonces) and `system.SyncRTCTime()` to resynchronize `CLOCK_REALTIME` from hardware RTC `/dev/rtc0`.
 
 ## The QMP client
 

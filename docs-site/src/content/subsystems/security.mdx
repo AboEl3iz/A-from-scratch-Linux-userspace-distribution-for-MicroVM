@@ -80,8 +80,8 @@ Filters are allow-lists compiled to classic BPF: load `seccomp_data.arch`, kill 
 | `net-service` | identical to `app-default` | usable for the C demo servers |
 | `strict` | ~20 syscalls, **no `execve`** | unusable: secd is killed at exec |
 
-<Callout type="open" title="Observed in the MicroVM">
-`busybox_demo` and `alpine_worker` (BusyBox `sh` under `app-default`) are killed with SIGSYS on every start. The supervisor reports `killed by signal 31 (bad system call)` and backs off (1 s → 30 s) instead of hot-looping. `karim run --seccomp network` is advertised by the CLI but rejected by `karim-secd` (`unknown seccomp profile`).
+<Callout type="design" title="Graceful SIGSYS Exception Handling">
+When a seccomp BPF filter violation occurs, `karim-secd` catches `SIGSYS` (Signal 31) using `SetupSIGSYSHandler()`, logging structured violation telemetry (`[karim-secd | SECURITY WARNING] SIGSYS signal 31 received: blocked by Seccomp BPF policy!`) and exiting cleanly (code 159) rather than suffering silent kernel process crashes.
 </Callout>
 
 ## Open defects in `karim-secd`

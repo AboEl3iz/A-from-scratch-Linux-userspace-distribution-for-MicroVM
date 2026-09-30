@@ -4,30 +4,37 @@ When the init process of the initial PID namespace exits — for *any* reason: `
 
 ## Two processes, two jobs
 
+## Two processes, two jobs
+
 | | `karim-init` (C) | `karim-svcd` (Go) |
 |---|---|---|
 | PID | 1, forever | child of init |
 | Scope | minimal and auditable | everything complex |
-| On crash | — (cannot crash into a panic) | init restarts it with backoff |
-| Reaping | orphans reparented to PID 1 | its own subtree (`PR_SET_CHILD_SUBREAPER`) |
-| Final step | kill remaining, sync, remount ro, `reboot(2)` | drain services, report action via exit code |
+| On crash | — (cannot crash into a panic) | init reaps reparented zombies and restarts svcd with backoff |
+| Reaping | orphans reparented to PID 1 (`waitpid(-1, &status, WNOHANG)`) | its own subtree (`PR_SET_CHILD_SUBREAPER`) |
+| Final step | kill remaining, sync, remount ro, `reboot(2)` | drain services, report action via exit code (64, 65, 66) |
 
 Moving the supervisor out of PID 1 converts a Go fatal error — which `recover` cannot intercept, e.g. `concurrent map read and map write` — from a kernel panic into a supervised restart.
 
 ## Init's event loop
 
-Init blocks the signals it cares about and consumes them **synchronously** with `sigtimedwait(2)`; no logic ever runs in an asynchronous signal handler (the previous handler called `printf`).
+Init handles child process termination using a dedicated `sigaction` signal handler (`SA_NOCLDSTOP | SA_RESTART`) for `SIGCHLD` running a non-blocking `waitpid(-1, &status, WNOHANG)` loop to reap reparented orphan processes without blocking the init thread. Unprivileged signals to PID 1 (`SIGUSR1`, `SIGUSR2`) are explicitly masked or safely ignored.
 
 ```c title="init/init.c"
-sigemptyset(&init_sigset);
-sigaddset(&init_sigset, SIGCHLD);
-sigaddset(&init_sigset, SIGTERM);   /* poweroff */
-sigaddset(&init_sigset, SIGINT);    /* Ctrl-Alt-Del: reboot */
-sigaddset(&init_sigset, SIGUSR1);   /* halt */
-sigaddset(&init_sigset, SIGUSR2);   /* consumed and ignored */
-sigaddset(&init_sigset, SIGHUP);    /* consumed and ignored */
-sigprocmask(SIG_BLOCK, &init_sigset, NULL);
-/* (comments added here) children reset the mask before execve */
+static void setup_signals(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigchld_handler;
+    sa.sa_flags = SA_NOCLDSTOP | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGCHLD, &sa, NULL);
+
+    struct sigaction sa_ign;
+    memset(&sa_ign, 0, sizeof(sa_ign));
+    sa_ign.sa_handler = SIG_IGN;
+    sigaction(SIGUSR1, &sa_ign, NULL);
+    sigaction(SIGUSR2, &sa_ign, NULL);
+}
 ```
 
 At boot init calls `reboot(RB_DISABLE_CAD)`, so Ctrl-Alt-Del arrives as `SIGINT` — a graceful request — instead of an immediate hard reset.
@@ -41,7 +48,8 @@ The supervisor tells init *why* it exited:
 | 64 | poweroff completed | finalize, `reboot(RB_POWER_OFF)` |
 | 65 | reboot completed | finalize, `reboot(RB_AUTOBOOT)` |
 | 66 | halt completed | finalize, `reboot(RB_HALT_SYSTEM)` |
-| anything else, or a signal | crash | restart after backoff (1 s → 30 s, reset after 60 s stable), **unless** init was already signalled to shut down; then any exit finalizes with the requested action |
+| 0 | clean service exit | log clean termination; reset run trackers |
+| anything else, or a signal | crash | clean up orphan processes, restart `karim-svcd` after backoff (1 s → 30 s) |
 
 If init itself was signalled to shut down and the supervisor does not finish within 90 s, init finalizes anyway. That deadline does not cover a shutdown the supervisor starts on its own (power button or RPC), because init only learns about that from the exit code. If the supervisor crashes in the middle of such a drain, init restarts it.
 
