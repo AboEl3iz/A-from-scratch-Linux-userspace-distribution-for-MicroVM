@@ -90,7 +90,7 @@ func InspectOCIArchive(tarPath string) (*OCIArchiveInfo, error) {
 	return nil, fmt.Errorf("no recognized manifest.json found in OCI archive %s", tarPath)
 }
 
-// ExtractLayerTarball extracts a single layer tarball into destDir with OCI whiteout resolution.
+// ExtractLayerTarball extracts a single layer tarball into destDir with OCI whiteout resolution and Tar-Slip protection.
 func ExtractLayerTarball(r io.Reader, destDir string) error {
 	tr := tar.NewReader(r)
 
@@ -103,13 +103,20 @@ func ExtractLayerTarball(r io.Reader, destDir string) error {
 			return fmt.Errorf("error reading layer tar entry: %w", err)
 		}
 
-		cleanPath := filepath.Clean(hdr.Name)
-		dirName := filepath.Dir(cleanPath)
-		baseName := filepath.Base(cleanPath)
+		targetPath, err := SafePathClean(destDir, hdr.Name)
+		if err != nil {
+			return fmt.Errorf("security check rejected entry %q: %w", hdr.Name, err)
+		}
+
+		baseName := filepath.Base(hdr.Name)
+		dirName := filepath.Dir(hdr.Name)
 
 		// 1. Handle OCI Opaque Whiteout (.wh..wh..opq)
 		if baseName == OpaqueWhiteout {
-			targetDir := filepath.Join(destDir, dirName)
+			targetDir, err := SafePathClean(destDir, dirName)
+			if err != nil {
+				return fmt.Errorf("opaque whiteout path security check failed: %w", err)
+			}
 			if err := clearDirectoryContents(targetDir); err != nil {
 				return fmt.Errorf("opaque whiteout failed for %s: %w", targetDir, err)
 			}
@@ -119,14 +126,15 @@ func ExtractLayerTarball(r io.Reader, destDir string) error {
 		// 2. Handle OCI File Whiteout (.wh.<filename>)
 		if strings.HasPrefix(baseName, WhiteoutPrefix) {
 			deletedName := strings.TrimPrefix(baseName, WhiteoutPrefix)
-			targetFile := filepath.Join(destDir, dirName, deletedName)
+			targetFile, err := SafePathClean(destDir, filepath.Join(dirName, deletedName))
+			if err != nil {
+				return fmt.Errorf("file whiteout path security check failed: %w", err)
+			}
 			_ = os.RemoveAll(targetFile)
 			continue
 		}
 
 		// 3. Regular File / Directory / Symlink Extraction
-		targetPath := filepath.Join(destDir, cleanPath)
-
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(targetPath, 0755); err != nil {
@@ -143,7 +151,7 @@ func ExtractLayerTarball(r io.Reader, destDir string) error {
 				mode = 0755
 			}
 
-			outFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+			outFile, err := SafeOpenFile(destDir, targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 			if err != nil {
 				return fmt.Errorf("failed creating file %s: %w", targetPath, err)
 			}
@@ -155,27 +163,30 @@ func ExtractLayerTarball(r io.Reader, destDir string) error {
 			outFile.Close()
 
 		case tar.TypeSymlink:
+			if err := ValidateSymlinkTarget(destDir, targetPath, hdr.Linkname); err != nil {
+				return fmt.Errorf("security check rejected symlink %q -> %q: %w", hdr.Name, hdr.Linkname, err)
+			}
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 				return fmt.Errorf("failed creating parent dir for symlink %s: %w", targetPath, err)
 			}
 			_ = os.Remove(targetPath)
-			linkVal := hdr.Linkname
-			if err := os.Symlink(linkVal, targetPath); err != nil {
-				return fmt.Errorf("failed creating symlink %s -> %s: %w", targetPath, linkVal, err)
+			if err := os.Symlink(hdr.Linkname, targetPath); err != nil {
+				return fmt.Errorf("failed creating symlink %s -> %s: %w", targetPath, hdr.Linkname, err)
 			}
 
 		case tar.TypeLink:
+			linkTarget, err := SafePathClean(destDir, hdr.Linkname)
+			if err != nil {
+				return fmt.Errorf("security check rejected hardlink %q -> %q: %w", hdr.Name, hdr.Linkname, err)
+			}
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 				return fmt.Errorf("failed creating parent dir for hardlink %s: %w", targetPath, err)
 			}
 			_ = os.Remove(targetPath)
-			linkTarget := filepath.Join(destDir, hdr.Linkname)
 			if err := os.Link(linkTarget, targetPath); err != nil {
-				linkVal := hdr.Linkname
-				if !strings.HasPrefix(linkVal, "/") && !strings.HasPrefix(linkVal, ".") {
-					linkVal = "/" + linkVal
+				if err := ValidateSymlinkTarget(destDir, targetPath, hdr.Linkname); err == nil {
+					_ = os.Symlink(hdr.Linkname, targetPath)
 				}
-				_ = os.Symlink(linkVal, targetPath)
 			}
 		}
 	}
