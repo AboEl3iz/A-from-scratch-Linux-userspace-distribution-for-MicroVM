@@ -17,6 +17,8 @@ func main() {
 	capsDropFlag := flag.String("caps-drop", "ALL", "Comma-separated list of capabilities to drop (default: ALL)")
 	noNewPrivsFlag := flag.Bool("no-new-privs", true, "Set PR_SET_NO_NEW_PRIVS flag")
 	execFlag := flag.String("exec", "", "Path to target binary to execute")
+	rootfsFlag := flag.String("rootfs", "", "Path to container rootfs for pivot_root isolation")
+	mountNSFlag := flag.Bool("mount-ns", false, "Enable unshared mount namespace")
 
 	flag.Parse()
 
@@ -51,6 +53,8 @@ func main() {
 		CapsAdd:        capsAdd,
 		CapsDrop:       capsDrop,
 		NoNewPrivs:     *noNewPrivsFlag,
+		Rootfs:         *rootfsFlag,
+		MountNS:        *mountNSFlag || *rootfsFlag != "",
 	}
 
 	// Apply hardened security policy
