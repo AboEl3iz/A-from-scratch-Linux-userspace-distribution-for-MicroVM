@@ -35,14 +35,18 @@ QMP_SOCK="$TEST_DIR/qmp.sock"
 VSOCK_SOCK="$TEST_DIR/vsock.sock"
 
 # Start background Go mock server test runner
-go run -v ./testing/mock_qmp_server.go -qmp "$QMP_SOCK" -vsock "$VSOCK_SOCK" &
+go build -o build/mock_qmp_server ./testing/mock_qmp_server.go
+./build/mock_qmp_server -qmp "$QMP_SOCK" -vsock "$VSOCK_SOCK" &
 MOCK_PID=$!
 
 # Ensure cleanup of mock server on exit
 trap 'kill -9 $MOCK_PID 2>/dev/null || true; rm -rf "$TEST_DIR"' EXIT
 
-# Wait for sockets to open
-sleep 1
+# Poll for socket availability (up to 5 seconds)
+for i in {1..50}; do
+    if [ -S "$QMP_SOCK" ]; then break; fi
+    sleep 0.1
+done
 
 if [ ! -S "$QMP_SOCK" ]; then
     echo "ERROR: Mock QMP socket failed to initialize at $QMP_SOCK"
