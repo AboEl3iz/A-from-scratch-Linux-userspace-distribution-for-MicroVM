@@ -41,9 +41,9 @@ func (s ProcessState) String() string {
 
 // ManagedService represents a runtime instance of a service.
 type ManagedService struct {
-	Spec         *ServiceSpec
-	State        ProcessState
-	Cmd          *exec.Cmd
+	Spec             *ServiceSpec
+	State            ProcessState
+	Cmd              *exec.Cmd
 	CGroupMgr        *CGroupManager
 	mu               sync.Mutex
 	restartCount     int
@@ -296,8 +296,6 @@ func min(a, b int) int {
 	}
 	return b
 }
-
-
 
 func streamLogs(prefix string, reader io.Reader) {
 	scanner := bufio.NewScanner(reader)

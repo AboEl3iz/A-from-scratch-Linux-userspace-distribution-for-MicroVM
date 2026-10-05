@@ -59,15 +59,15 @@ func ParseAndPrepareOCIBundle(bundleJSON string) (*ServiceSpec, error) {
 
 	// Build ServiceSpec from OCI Spec or defaults
 	spec := &ServiceSpec{
-		Name:             containerID,
-		Exec:             "/bin/sh",
-		Args:             nil,
-		Env:              []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TERM=xterm"},
-		Directory:        "/",
-		RootDir:          targetRootfs,
-		Restart:          bundle.Restart,
-		SeccompProfile:   "app-default",
-		NoNewPrivs:       true,
+		Name:           containerID,
+		Exec:           "/bin/sh",
+		Args:           nil,
+		Env:            []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TERM=xterm"},
+		Directory:      "/",
+		RootDir:        targetRootfs,
+		Restart:        bundle.Restart,
+		SeccompProfile: "app-default",
+		NoNewPrivs:     true,
 	}
 	if spec.Restart == "" {
 		spec.Restart = "on-failure"

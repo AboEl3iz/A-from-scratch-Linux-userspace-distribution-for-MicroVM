@@ -161,7 +161,6 @@ func (b *svcdBridge) ApplyBundle(bundleJSON string) error {
 	return ms.Start()
 }
 
-
 func main() {
 	portFlag := flag.Uint("port", uint(vsockd.DefaultVSockPort), "AF_VSOCK port to listen on")
 	socketFlag := flag.String("socket", "/run/karim/vsock.sock", "Unix Domain Socket path fallback")

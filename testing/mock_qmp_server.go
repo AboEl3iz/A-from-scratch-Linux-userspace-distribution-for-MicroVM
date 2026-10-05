@@ -29,7 +29,6 @@ func (m *mockVSock) Unquiesce() error                           { m.quiesced = f
 func (m *mockVSock) LoadService(configTOML string) error        { return nil }
 func (m *mockVSock) ApplyBundle(bundleJSON string) error        { return nil }
 
-
 type mockQMPServer struct {
 	mu        sync.Mutex
 	snapshots map[string]string

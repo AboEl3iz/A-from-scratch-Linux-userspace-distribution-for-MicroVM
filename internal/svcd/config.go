@@ -11,19 +11,19 @@ import (
 
 // ServiceSpec defines the configuration structure for a service managed by karim-svcd.
 type ServiceSpec struct {
-	Name             string   `json:"name"`
-	Exec             string   `json:"exec"`
-	Args             []string `json:"args"`
-	Env              []string `json:"env"`
-	Directory        string   `json:"directory"`
+	Name      string   `json:"name"`
+	Exec      string   `json:"exec"`
+	Args      []string `json:"args"`
+	Env       []string `json:"env"`
+	Directory string   `json:"directory"`
 	// RootDir, if set, causes the service to be launched inside a chroot(2) of this path.
 	// Use this when running a service whose binary lives inside an OCI container layer mount,
 	// e.g. root_dir = "/mnt/layers/alpine" so that exec = "/bin/sh" resolves inside alpine.
-	RootDir          string   `json:"root_dir"`
-	After            []string `json:"after"`
-	MemoryLimit      int64    `json:"memory_limit"` // Bytes (0 means unlimited)
-	CPUQuota         float64  `json:"cpu_quota"`    // Percentage (e.g. 50.0 for 50%)
-	Restart          string   `json:"restart"`      // "always", "on-failure", "never"
+	RootDir     string   `json:"root_dir"`
+	After       []string `json:"after"`
+	MemoryLimit int64    `json:"memory_limit"` // Bytes (0 means unlimited)
+	CPUQuota    float64  `json:"cpu_quota"`    // Percentage (e.g. 50.0 for 50%)
+	Restart     string   `json:"restart"`      // "always", "on-failure", "never"
 	// MaxRestarts limits restart attempts. 0 = unlimited. Prevents infinite crashloops.
 	MaxRestarts      int      `json:"max_restarts"`
 	SeccompProfile   string   `json:"seccomp_profile"`
@@ -284,7 +284,6 @@ func ParseServiceSpecFromBytes(data []byte) (*ServiceSpec, error) {
 
 	return spec, nil
 }
-
 
 func LoadServiceDir(dir string) ([]*ServiceSpec, error) {
 	entries, err := os.ReadDir(dir)

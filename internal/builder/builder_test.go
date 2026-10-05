@@ -135,4 +135,3 @@ func TestBusyboxStaging(t *testing.T) {
 		t.Errorf("rootfs.sqsh missing: %v", err)
 	}
 }
-

@@ -95,7 +95,6 @@ func (m *mockServiceProvider) ApplyBundle(bundleJSON string) error {
 	return nil
 }
 
-
 func TestVSockRPC_ServerClient(t *testing.T) {
 	tmpDir := t.TempDir()
 	socketPath := filepath.Join(tmpDir, "vsock_test.sock")

@@ -3,12 +3,12 @@ package pkgd
 // OCI Runtime Spec structures matching opencontainers/runtime-spec (config.json)
 
 type Spec struct {
-	Version *string `json:"ociVersion,omitempty"`
-	Root    *Root   `json:"root,omitempty"`
-	Process *Process `json:"process,omitempty"`
-	Hostname string  `json:"hostname,omitempty"`
-	Mounts  []Mount `json:"mounts,omitempty"`
-	Linux   *Linux  `json:"linux,omitempty"`
+	Version  *string  `json:"ociVersion,omitempty"`
+	Root     *Root    `json:"root,omitempty"`
+	Process  *Process `json:"process,omitempty"`
+	Hostname string   `json:"hostname,omitempty"`
+	Mounts   []Mount  `json:"mounts,omitempty"`
+	Linux    *Linux   `json:"linux,omitempty"`
 }
 
 type Root struct {
@@ -84,9 +84,9 @@ type LinuxCPU struct {
 
 // OCIContainerBundle represents an incoming dynamic bundle request payload over VSOCK/RPC.
 type OCIContainerBundle struct {
-	BundleID   string   `json:"bundle_id"`
-	Spec       *Spec    `json:"spec"`
-	LowerDirs  []string `json:"lower_dirs,omitempty"`
-	RootfsTar  []byte   `json:"rootfs_tar,omitempty"`
-	Restart    string   `json:"restart,omitempty"`
+	BundleID  string   `json:"bundle_id"`
+	Spec      *Spec    `json:"spec"`
+	LowerDirs []string `json:"lower_dirs,omitempty"`
+	RootfsTar []byte   `json:"rootfs_tar,omitempty"`
+	Restart   string   `json:"restart,omitempty"`
 }

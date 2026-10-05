@@ -181,8 +181,6 @@ func (sb *supervisorBridge) ApplyBundle(bundleJSON string) error {
 	return nil
 }
 
-
-
 func main() {
 	serviceDirFlag := flag.String("config-dir", defaultServiceDir, "Directory containing TOML service definitions")
 	enableNetFlag := flag.Bool("enable-net", true, "Automatically configure virtio-net interface via netlink")

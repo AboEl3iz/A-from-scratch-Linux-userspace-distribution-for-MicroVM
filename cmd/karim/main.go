@@ -1041,4 +1041,3 @@ func runApplyBundle(target string, args []string) {
 
 	fmt.Printf("✅ %v\n", resp.Data)
 }
-

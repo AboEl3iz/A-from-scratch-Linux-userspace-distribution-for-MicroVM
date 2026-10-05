@@ -371,4 +371,3 @@ func VerifyInterfaceUp(ifaceName string) error {
 
 	return nil
 }
-
