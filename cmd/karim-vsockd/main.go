@@ -140,6 +140,27 @@ func (b *svcdBridge) LoadService(configTOML string) error {
 	return ms.Start()
 }
 
+// ApplyBundle processes an incoming dynamic OCI container bundle payload and executes it.
+func (b *svcdBridge) ApplyBundle(bundleJSON string) error {
+	spec, err := svcd.ParseAndPrepareOCIBundle(bundleJSON)
+	if err != nil {
+		return fmt.Errorf("failed to prepare OCI bundle: %w", err)
+	}
+
+	fmt.Printf("[karim-vsockd] Executing dynamic OCI container bundle %q (rootfs: %s)...\n", spec.Name, spec.RootDir)
+
+	ms := svcd.NewManagedService(spec, b.cgm)
+
+	b.mu.Lock()
+	if existing, ok := b.services[spec.Name]; ok {
+		_ = existing.Stop()
+	}
+	b.services[spec.Name] = ms
+	b.mu.Unlock()
+
+	return ms.Start()
+}
+
 
 func main() {
 	portFlag := flag.Uint("port", uint(vsockd.DefaultVSockPort), "AF_VSOCK port to listen on")
