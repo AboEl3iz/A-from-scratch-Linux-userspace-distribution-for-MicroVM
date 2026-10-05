@@ -88,6 +88,13 @@ func (m *mockServiceProvider) LoadService(configTOML string) error {
 	return nil
 }
 
+func (m *mockServiceProvider) ApplyBundle(bundleJSON string) error {
+	if bundleJSON == "" {
+		return fmt.Errorf("empty bundle payload")
+	}
+	return nil
+}
+
 
 func TestVSockRPC_ServerClient(t *testing.T) {
 	tmpDir := t.TempDir()

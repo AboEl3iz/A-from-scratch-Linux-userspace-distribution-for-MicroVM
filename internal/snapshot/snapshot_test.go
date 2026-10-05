@@ -33,6 +33,9 @@ func (m *mockVSockProvider) Unquiesce() error {
 func (m *mockVSockProvider) LoadService(configTOML string) error {
 	return nil
 }
+func (m *mockVSockProvider) ApplyBundle(bundleJSON string) error {
+	return nil
+}
 
 func setupMockServers(t *testing.T) (string, string, *mockVSockProvider, func()) {
 	t.Helper()
