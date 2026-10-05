@@ -22,6 +22,8 @@ type ServiceProvider interface {
 	// LoadService parses the given TOML service definition payload and registers + starts the service
 	// in the live supervisor without requiring a MicroVM reboot.
 	LoadService(configTOML string) error
+	// ApplyBundle processes an incoming dynamic OCI container bundle payload and executes it.
+	ApplyBundle(bundleJSON string) error
 }
 
 // Server encapsulates the vsockd RPC control plane daemon.
@@ -314,6 +316,22 @@ func (s *Server) dispatchCommand(req *RPCRequest) RPCResponse {
 			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
 		}
 		return RPCResponse{ID: req.ID, Success: true, Data: fmt.Sprintf("service %s started dynamically", req.Service)}
+
+	case "apply_bundle", "bundle_apply":
+		if s.provider == nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: "no service provider configured"}
+		}
+		if req.Payload == "" {
+			return RPCResponse{ID: req.ID, Success: false, Error: "missing OCI bundle payload in request"}
+		}
+		if err := s.provider.ApplyBundle(req.Payload); err != nil {
+			return RPCResponse{ID: req.ID, Success: false, Error: err.Error()}
+		}
+		serviceName := req.Service
+		if serviceName == "" {
+			serviceName = "dynamic-oci-bundle"
+		}
+		return RPCResponse{ID: req.ID, Success: true, Data: fmt.Sprintf("OCI container bundle %s applied and launched successfully", serviceName)}
 
 	default:
 		return RPCResponse{
