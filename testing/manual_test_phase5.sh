@@ -44,7 +44,10 @@ rm -f "$TEST_SOCKET"
 OBSD_PID=$!
 trap 'kill $OBSD_PID 2>/dev/null || true; rm -f "$TEST_SOCKET"' EXIT
 
-sleep 0.5
+for i in {1..50}; do
+    if [ -S "$TEST_SOCKET" ]; then break; fi
+    sleep 0.1
+done
 
 echo "==> Testing 'karim obsd' telemetry query..."
 obsd_out=$(./dist/karim --target "unix://$TEST_SOCKET" obsd)

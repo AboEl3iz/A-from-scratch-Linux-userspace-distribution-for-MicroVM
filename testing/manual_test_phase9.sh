@@ -64,13 +64,18 @@ mkdir -p "$TEST_DIR"
 VSOCK_SOCK="$TEST_DIR/vsock.sock"
 
 # Start background Go mock server test runner
-go run -v ./testing/mock_qmp_server.go -qmp "$TEST_DIR/qmp.sock" -vsock "$VSOCK_SOCK" &
+go build -o build/mock_qmp_server ./testing/mock_qmp_server.go
+./build/mock_qmp_server -qmp "$TEST_DIR/qmp.sock" -vsock "$VSOCK_SOCK" &
 MOCK_PID=$!
 
 # Ensure cleanup on exit
 trap 'kill -9 $MOCK_PID 2>/dev/null || true; rm -rf "$TEST_DIR"' EXIT
 
-sleep 1
+# Poll for socket availability (up to 5 seconds)
+for i in {1..50}; do
+    if [ -S "$VSOCK_SOCK" ]; then break; fi
+    sleep 0.1
+done
 
 if [ ! -S "$VSOCK_SOCK" ]; then
     echo "ERROR: Mock VSOCK socket failed to initialize at $VSOCK_SOCK"

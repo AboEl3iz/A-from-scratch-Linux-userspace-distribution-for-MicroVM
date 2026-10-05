@@ -43,7 +43,10 @@ rm -f "$TEST_SOCKET"
 VSOCKD_PID=$!
 trap 'kill $VSOCKD_PID 2>/dev/null || true; rm -f "$TEST_SOCKET"' EXIT
 
-sleep 0.2
+for i in {1..50}; do
+    if [ -S "$TEST_SOCKET" ]; then break; fi
+    sleep 0.1
+done
 
 echo "==> Testing 'karim ping'..."
 ping_out=$(./dist/karim --target "unix://$TEST_SOCKET" ping)
