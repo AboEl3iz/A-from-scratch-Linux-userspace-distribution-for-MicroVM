@@ -6,6 +6,7 @@ Isolation in Karim is layered. Each layer is described with its **current** stat
 |---|---|---|
 | Service identity | `user` / `group` → `syscall.Credential` | Enforced |
 | Signal boundary | UID separation: services with a non-root `user` cannot `kill(2)` init or the supervisor | Enforced for non-root services, verified in a VM |
+| Mount isolation | Mount Namespace (`CLONE_NEWNS`) + `pivot_root` in `karim-secd` | Enforced when `-rootfs` is set |
 | Control-plane access | `0600` socket, `SO_PEERCRED`, VSOCK CID 2 only for privileged commands | Enforced |
 | Resource limits | cgroup v2 `memory.max`, `cpu.max`, `CLONE_INTO_CGROUP` | Enforced, best effort (a failed limit write or cgroup creation is logged; the service still starts) |
 | Syscall filter | `karim-secd` seccomp-BPF allow-lists | Enforced, with open profile gaps |
@@ -23,15 +24,17 @@ sequenceDiagram
   participant T as Service binary
   S->>K: clone3(CLONE_INTO_CGROUP) into /sys/fs/cgroup/karim/<svc>
   K->>K: child: setgroups([]) → setgid → setuid (user = "nobody")
-  K->>D: execve /sbin/karim-secd -profile app-default -exec <bin> -- args
+  K->>D: execve /sbin/karim-secd -rootfs <dir> -mount-ns -profile app-default -exec <bin> -- args
+  D->>K: unshare(CLONE_NEWNS) + mount("", "/", "", MS_PRIVATE)
+  D->>K: pivot_root(newRoot, .oldroot) + chdir("/")
   D->>K: prctl(PR_SET_NO_NEW_PRIVS)
   D->>K: prctl(PR_CAPBSET_DROP) for every capability not in caps_add
   D->>K: capset(effective = permitted = caps_add)
   D->>K: prctl(PR_SET_SECCOMP, FILTER, allow-list)
-  D->>T: execve target (same PID, same cgroup)
+  D->>T: execve target (same PID, same cgroup, isolated rootfs)
 ```
 
-`karim-secd` is skipped entirely when `seccomp_profile` is exactly `unrestricted`, `none` or `disabled` (case-sensitive), or when no secd binary is found. secd itself lower-cases the profile name, so `"Unrestricted"` does run secd, with an allow-all filter but with capabilities dropped.
+`karim-secd` is skipped entirely when `seccomp_profile` is exactly `unrestricted`, `none` or `disabled` (case-sensitive), or when no secd binary is found. secd itself lower-cases the profile name, so `"Unrestricted"` does run secd, with an allow-all filter but with capabilities dropped. When `-rootfs` is provided, `karim-secd` performs `pivot_root` into the container rootfs before applying seccomp filters.
 
 ## Identity and the signal boundary
 

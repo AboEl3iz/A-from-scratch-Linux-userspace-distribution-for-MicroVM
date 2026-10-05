@@ -26,6 +26,7 @@ export const sections = [
         pages: [
           { path: '/subsystems/vsock-transport', title: 'VSOCK Transport', file: 'subsystems/vsock-transport.mdx', icon: 'networking' },
           { path: '/subsystems/oci-layers', title: 'OCI Layer Extraction', file: 'subsystems/oci-layers.mdx', icon: 'storage' },
+          { path: '/subsystems/dynamic-oci-runtime', title: 'Dynamic OCI Runtime', file: 'subsystems/dynamic-oci-runtime.mdx', icon: 'storage' },
         ],
       },
       {

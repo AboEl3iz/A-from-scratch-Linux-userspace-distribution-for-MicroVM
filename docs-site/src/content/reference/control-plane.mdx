@@ -30,6 +30,7 @@ A connection carries any number of request/response pairs, except `trace`, which
 | `trace` (`stream_exec`, `execsnoop`) | | | stream of `ExecEvent` |
 | `get_system_status` (`system`, `status`) | | | `SystemStatus` |
 | `load_service` (`apply_service`) | ✓ | `payload` = TOML | message |
+| `apply_bundle` (`bundle_apply`) | ✓ | `service`, `payload` = JSON OCI Bundle | message |
 | `run_service` | ✓ | `service`, `payload` = TOML | message |
 | `quiesce` (`freeze`) | ✓ | | report of frozen filesystems |
 | `unquiesce` (`thaw`) | ✓ | | report of thawed filesystems |

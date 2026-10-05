@@ -63,6 +63,7 @@ Nothing in the guest persists. The only durable state is a [snapshot](/subsystem
 |---|---|
 | `BuildOverlayOptions(lower, upper, work)` | formats `lowerdir=…,upperdir=…,workdir=…` |
 | `MountOverlay(cfg)` | `mount("overlay", target, "overlay", 0, opts)` and validates that every path is set |
+| `MountDynamicOverlay(id, lowerDirs, target)` | dynamically prepares upper/work under `/run/karim/containers/<id>` and mounts OverlayFS |
 | `UnmountOverlay(target)` | lazy unmount (`MNT_DETACH`), `EINVAL` treated as "not mounted" |
 | `IsMountPoint(path)` | exact match in `/proc/mounts`, with a `st_dev` comparison as fallback |
 
