@@ -149,6 +149,38 @@ func (sb *supervisorBridge) LoadService(configTOML string) error {
 	return nil
 }
 
+// ApplyBundle processes an incoming dynamic OCI container bundle payload and executes it.
+func (sb *supervisorBridge) ApplyBundle(bundleJSON string) error {
+	spec, err := svcd.ParseAndPrepareOCIBundle(bundleJSON)
+	if err != nil {
+		return fmt.Errorf("failed to prepare OCI bundle: %w", err)
+	}
+
+	fmt.Printf("[karim-svcd] Executing dynamic OCI container bundle %q (rootfs: %s)...\n", spec.Name, spec.RootDir)
+
+	cgm, err := svcd.NewCGroupManager()
+	if err != nil {
+		fmt.Printf("[karim-svcd] Warning: cgroup manager init failed for OCI bundle %s: %v\n", spec.Name, err)
+	}
+
+	ms := svcd.NewManagedService(spec, cgm)
+
+	sb.mu.Lock()
+	if existing, ok := sb.managedServices[spec.Name]; ok {
+		fmt.Printf("[karim-svcd] Replacing existing container %q...\n", spec.Name)
+		_ = existing.Stop()
+	}
+	sb.managedServices[spec.Name] = ms
+	sb.mu.Unlock()
+
+	if err := ms.Start(); err != nil {
+		return fmt.Errorf("failed to start dynamic OCI container bundle %s: %w", spec.Name, err)
+	}
+
+	fmt.Printf("[karim-svcd] Dynamic OCI container bundle %q running successfully (PID: %d)\n", spec.Name, ms.Cmd.Process.Pid)
+	return nil
+}
+
 
 
 func main() {
