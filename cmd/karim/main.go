@@ -45,6 +45,7 @@ func printHelp() {
 	fmt.Println("  obsd                       Fetch eBPF kernel latency histograms & metrics")
 	fmt.Println("  trace                      Stream live traced process executions")
 	fmt.Println("  apply <service.toml>       Hot-load a TOML service config into the live MicroVM (no reboot)")
+	fmt.Println("  apply-bundle <dir|spec>    Apply dynamic OCI container runtime bundle payload over VSOCK")
 	fmt.Println("  run                        Run a dynamic containerized service on the MicroVM")
 	fmt.Println("    --name <svc>               Service name")
 	fmt.Println("    --exec <cmd>               Binary to execute (absolute path in guest rootfs)")
@@ -129,6 +130,13 @@ func main() {
 			os.Exit(1)
 		}
 		runApply(*targetFlag, args[1])
+
+	case "apply-bundle", "apply_bundle", "bundle":
+		if len(args) < 2 {
+			fmt.Fprintf(os.Stderr, "Error: missing bundle directory or config path. Usage: karim apply-bundle <bundle-dir|config.json> [bundle-id]\n")
+			os.Exit(1)
+		}
+		runApplyBundle(*targetFlag, args[1:])
 
 	case "run":
 		runRun(*targetFlag, args[1:])
@@ -948,5 +956,89 @@ func runRun(target string, cmdArgs []string) {
 	fmt.Printf("[karim-cli] %v\n", resp.Data)
 	fmt.Println("[karim-cli] Use 'karim ps' to confirm the service is running.")
 	fmt.Printf("[karim-cli] Use 'karim logs %s' to view its output.\n", *name)
+}
+
+func runApplyBundle(target string, args []string) {
+	bundlePath := args[0]
+	bundleID := "oci-container"
+	if len(args) > 1 {
+		bundleID = args[1]
+	}
+
+	configPath := bundlePath
+	info, err := os.Stat(bundlePath)
+	if err == nil && info.IsDir() {
+		configPath = filepath.Join(bundlePath, "config.json")
+		if bundleID == "oci-container" {
+			bundleID = filepath.Base(filepath.Clean(bundlePath))
+		}
+	}
+
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed reading OCI spec %q: %v\n", configPath, err)
+		os.Exit(1)
+	}
+
+	var spec pkgd.Spec
+	if err := json.Unmarshal(configBytes, &spec); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: invalid OCI config.json spec %q: %v\n", configPath, err)
+		os.Exit(1)
+	}
+
+	bundle := pkgd.OCIContainerBundle{
+		BundleID: bundleID,
+		Spec:     &spec,
+	}
+
+	bundleBytes, err := json.Marshal(bundle)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed encoding bundle payload: %v\n", err)
+		os.Exit(1)
+	}
+
+	conn, err := vsockd.Dial(target)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed connecting to %s: %v\n", target, err)
+		os.Exit(1)
+	}
+	defer conn.Close()
+
+	req := vsockd.RPCRequest{
+		ID:      "bundle-1",
+		Command: "apply_bundle",
+		Service: bundleID,
+		Payload: string(bundleBytes),
+	}
+
+	reqBytes, err := vsockd.EncodeJSON(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed encoding request: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := vsockd.WriteFrame(conn, reqBytes); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed writing request frame: %v\n", err)
+		os.Exit(1)
+	}
+
+	respBytes, err := vsockd.ReadFrame(conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed reading response frame: %v\n", err)
+		os.Exit(1)
+	}
+
+	var resp vsockd.RPCResponse
+	if err := vsockd.DecodeJSON(respBytes, &resp); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed decoding response: %v\n", err)
+		os.Exit(1)
+	}
+
+	if !resp.Success {
+		fmt.Fprintf(os.Stderr, "❌ Error applying OCI bundle: %s\n", resp.Error)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✅ %v\n", resp.Data)
 }
 
