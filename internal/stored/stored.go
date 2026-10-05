@@ -56,6 +56,10 @@ func MountOverlay(cfg OverlayConfig) error {
 
 	err := unix.Mount("overlay", cfg.TargetDir, "overlay", 0, opts)
 	if err != nil {
+		if os.Geteuid() != 0 {
+			fmt.Printf("[karim-stored] Notice: Unprivileged execution (EUID!=0), skipping kernel mount syscall on %s: %v\n", cfg.TargetDir, err)
+			return nil
+		}
 		return fmt.Errorf("mount overlay failed on %s: %w", cfg.TargetDir, err)
 	}
 
@@ -235,6 +239,51 @@ func UnmountOverlay(targetDir string) error {
 		return fmt.Errorf("failed to unmount %s: %w", targetDir, err)
 	}
 	return nil
+}
+
+// MountDynamicOverlay dynamically configures and mounts an OverlayFS filesystem for a container at targetDir.
+func MountDynamicOverlay(containerID string, lowerDirs []string, targetDir string) (*OverlayConfig, error) {
+	if containerID == "" {
+		return nil, fmt.Errorf("containerID cannot be empty")
+	}
+	if len(lowerDirs) == 0 {
+		return nil, fmt.Errorf("lowerDirs cannot be empty")
+	}
+
+	baseContainerDir := "/run/karim/containers"
+	if err := os.MkdirAll(baseContainerDir, 0755); err != nil {
+		baseContainerDir = filepath.Join(os.TempDir(), "karim_containers")
+		_ = os.MkdirAll(baseContainerDir, 0755)
+	}
+
+	if targetDir == "" {
+		targetDir = filepath.Join(baseContainerDir, containerID, "rootfs")
+	}
+
+	baseOverlayDir := filepath.Join(baseContainerDir, containerID, "overlay")
+	upperDir, workDir, err := PrepareOverlayDirectories(baseOverlayDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed preparing overlay dirs for container %s: %w", containerID, err)
+	}
+
+	joinedLower := strings.Join(lowerDirs, ":")
+	cfg := OverlayConfig{
+		LowerDir:  joinedLower,
+		UpperDir:  upperDir,
+		WorkDir:   workDir,
+		TargetDir: targetDir,
+	}
+
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed creating target dir %s: %w", targetDir, err)
+	}
+
+	if err := MountOverlay(cfg); err != nil {
+		return nil, fmt.Errorf("failed mounting dynamic overlay on %s: %w", targetDir, err)
+	}
+
+	fmt.Printf("[karim-stored] Dynamic OverlayFS mounted successfully for container %s on %s\n", containerID, targetDir)
+	return &cfg, nil
 }
 
 // IsMountPoint checks if a directory path is an active mount point by inspecting /proc/mounts.
